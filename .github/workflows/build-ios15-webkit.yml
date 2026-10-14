@@ -23,6 +23,9 @@ jobs:
           cp -R scripts WebKit-15.0/
           git -C WebKit-15.0 apply ../ios15-port.patch
 
+      - name: Alias python to python3
+        run: sudo ln -s $(which python3) /usr/local/bin/python
+
       - name: Build WebKit (device)
         run: |
           cd WebKit-15.0
