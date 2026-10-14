@@ -25,18 +25,18 @@ jobs:
 
       - name: Copy shims and apply patch
         run: |
-          # Copy scripts vào cả trong WebKit-15.0 và thư mục gốc để mọi cấp ../../ hoặc ../../../ đều tìm thấy
+          # Copy scripts vào trong WebKit-15.0 (đồng thời giữ bản gốc ở ngoài) để mọi cấp ../../ hoặc ../../../ đều hợp lệ
           cp -R scripts WebKit-15.0/
-          
-          # Chuẩn hóa CRLF và khoảng trắng U+00A0 (nếu có) trước khi apply
+
+          # Chuẩn hóa CRLF và khoảng trắng U+00A0 (nếu có) trước khi apply patch
           python3 -c '
           with open("ios15-port.patch", "rb") as f:
               data = f.read().replace(b"\r\n", b"\n").replace(b"\xc2\xa0", b" ")
           with open("ios15-port.patch", "wb") as f:
               f.write(data)
           '
-          
-          # Apply patch với cờ --ignore-space-change để tránh lỗi khoảng trắng
+
+          # Apply patch
           git -C WebKit-15.0 apply --verbose --ignore-space-change ../ios15-port.patch
 
       - name: Build WebKit (device)
@@ -44,9 +44,13 @@ jobs:
           SHIM_INC="$(pwd)/scripts/abi-shims/include"
           ROOT_DIR="$(pwd)"
           cd WebKit-15.0
+
+          # Vô hiệu hóa readline trong jsc.cpp vì iOS SDK không có readline/history.h
+          sed -i '' 's/#if HAVE(READLINE)/#if 0/' Source/JavaScriptCore/jsc.cpp
+
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
-            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations" \
-            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -Wno-error -Wno-error=deprecated-declarations -Wno-enum-constexpr-conversion"
+            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations" \
+            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-error=deprecated-declarations -Wno-enum-constexpr-conversion"
