@@ -14,24 +14,39 @@ jobs:
         run: |
           sudo xcode-select -s /Applications/Xcode_15.4.app
 
+      - name: Alias python to python3
+        run: |
+          sudo ln -sf $(which python3) /usr/local/bin/python
+          python --version
+
       - name: Fetch WebKit source
         run: |
           git clone --depth 1 --branch releases/Apple/Safari-15-iOS-15.0 https://github.com/WebKit/WebKit.git WebKit-15.0
 
       - name: Copy shims and apply patch
         run: |
+          # Copy scripts vào cả trong WebKit-15.0 và thư mục gốc để mọi cấp ../../ hoặc ../../../ đều tìm thấy
           cp -R scripts WebKit-15.0/
-          git -C WebKit-15.0 apply ../ios15-port.patch
-
-      - name: Alias python to python3
-        run: sudo ln -s $(which python3) /usr/local/bin/python
+          
+          # Chuẩn hóa CRLF và khoảng trắng U+00A0 (nếu có) trước khi apply
+          python3 -c '
+          with open("ios15-port.patch", "rb") as f:
+              data = f.read().replace(b"\r\n", b"\n").replace(b"\xc2\xa0", b" ")
+          with open("ios15-port.patch", "wb") as f:
+              f.write(data)
+          '
+          
+          # Apply patch với cờ --ignore-space-change để tránh lỗi khoảng trắng
+          git -C WebKit-15.0 apply --verbose --ignore-space-change ../ios15-port.patch
 
       - name: Build WebKit (device)
         run: |
+          SHIM_INC="$(pwd)/scripts/abi-shims/include"
+          ROOT_DIR="$(pwd)"
           cd WebKit-15.0
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
-            OTHER_CFLAGS='$(inherited) -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations' \
-            OTHER_CPLUSPLUSFLAGS='$(inherited) -Wno-error -Wno-error=deprecated-declarations'
+            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations" \
+            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -Wno-error -Wno-error=deprecated-declarations -Wno-enum-constexpr-conversion"
