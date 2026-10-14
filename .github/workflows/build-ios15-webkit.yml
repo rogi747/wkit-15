@@ -53,9 +53,9 @@ jobs:
           # 2. Vô hiệu hóa readline trong jsc.cpp vì iOS SDK không có readline/history.h
           sed -i '' 's/#if HAVE(READLINE)/#if 0/' Source/JavaScriptCore/jsc.cpp
 
-          # 3. Link trực tiếp libWTF.a và libbmalloc.a vào jsc và các tool test của JSC
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a"' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a"' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
+          # 3. Link đầy đủ libWTF.a, libbmalloc.a cùng CoreFoundation, Foundation, libobjc và libicucore cho jsc và các tool test
+          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
+          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
