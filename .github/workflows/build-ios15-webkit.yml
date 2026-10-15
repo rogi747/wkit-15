@@ -57,6 +57,19 @@ jobs:
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
+          # 4. Ngăn lỗi trùng lặp NSTextList và textLists trong UIKitSPI.h trên iOS 16+ SDK
+          python3 -c '
+          path = "Source/WebCore/PAL/pal/spi/ios/UIKitSPI.h"
+          with open(path, "r") as f:
+              content = f.read()
+          content = content.replace("- (NSArray *)textLists;", "// - (NSArray *)textLists;")
+          content = content.replace("- (void)setTextLists:(NSArray *)textLists;", "// - (void)setTextLists:(NSArray *)textLists;")
+          content = content.replace("@interface NSTextList : NSObject", "#if !__has_include(<UIKit/NSTextList.h>)\n@interface NSTextList : NSObject")
+          content = content.replace("- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end", "- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end\n#endif")
+          with open(path, "w") as f:
+              f.write(content)
+          '
+
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
