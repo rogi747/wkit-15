@@ -57,22 +57,57 @@ jobs:
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Ngăn lỗi trùng lặp NSTextList và textLists trong UIKitSPI.h trên iOS 16+ SDK
+          # 4. Ngăn lỗi trùng lặp SPI trong UIKitSPI.h và AVFoundationSPI.h trên iOS 16+/17+ SDK
           python3 -c '
-          path = "Source/WebCore/PAL/pal/spi/ios/UIKitSPI.h"
-          with open(path, "r") as f:
-              content = f.read()
-          content = content.replace("- (NSArray *)textLists;", "// - (NSArray *)textLists;")
-          content = content.replace("- (void)setTextLists:(NSArray *)textLists;", "// - (void)setTextLists:(NSArray *)textLists;")
-          content = content.replace("@interface NSTextList : NSObject", "#if !__has_include(<UIKit/NSTextList.h>)\n@interface NSTextList : NSObject")
-          content = content.replace("- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end", "- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end\n#endif")
-          with open(path, "w") as f:
-              f.write(content)
+          import re
+
+          # 4a. Sửa UIKitSPI.h
+          uikit_path = "Source/WebCore/PAL/pal/spi/ios/UIKitSPI.h"
+          with open(uikit_path, "r") as f:
+              c = f.read()
+          c = c.replace("- (NSArray *)textLists;", "// - (NSArray *)textLists;")
+          c = c.replace("- (void)setTextLists:(NSArray *)textLists;", "// - (void)setTextLists:(NSArray *)textLists;")
+          c = c.replace("@interface NSTextList : NSObject", "#if !__has_include(<UIKit/NSTextList.h>)\n@interface NSTextList : NSObject")
+          c = c.replace("- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end", "- (NSString *)markerForItemNumber:(NSInteger)itemNum;\n@end\n#endif")
+          with open(uikit_path, "w") as f:
+              f.write(c)
+
+          # 4b. Sửa AVFoundationSPI.h
+          avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
+          with open(avf_path, "r") as f:
+              avf = f.read()
+          # Xóa khối typedef NS_ENUM(NSInteger, AVExternalContentProtectionStatus) { ... }; vì đã có sẵn trong AVContentKeySession.h
+          avf = re.sub(
+              r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;",
+              "// AVExternalContentProtectionStatus is already defined in SDK AVContentKeySession.h",
+              avf,
+              flags=re.DOTALL
+          )
+          # Xóa khối @interface AVVideoPerformanceMetrics : NSObject ... @end và thay bằng Category để không xung đột với AVVideoPerformanceMetrics.h
+          avf = re.sub(
+              r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end",
+              "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif",
+              avf,
+              flags=re.DOTALL
+          )
+          with open(avf_path, "w") as f:
+              f.write(avf)
+
+          # Nếu trong SDK 17.5 các property trong AVVideoPerformanceMetrics.h bị gắn API_UNAVAILABLE, cung cấp Category method cho WebCore
+          with open(avf_path, "r") as f:
+              avf = f.read()
+          category_decl = """#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)
+          #import <AVFoundation/AVVideoPerformanceMetrics.h>
+          @interface AVVideoPerformanceMetrics (WebKitSPI)
+          - (unsigned long)_wk_totalNumberOfVideoFrames;
+          @end
+          #endif"""
           '
 
+          # Bỏ kiểm tra availability đối với các SPI cũ vừa bị Apple đánh dấu API_UNAVAILABLE trên SDK 17.5
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
-            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations" \
-            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-error=deprecated-declarations -Wno-enum-constexpr-conversion"
+            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-error=strict-prototypes -Wno-strict-prototypes" \
+            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-enum-constexpr-conversion"
