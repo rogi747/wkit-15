@@ -59,13 +59,16 @@ jobs:
 
           cd WebKit-15.0
 
-          # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs (vì Xcode 15.4 dùng SDK 17.5 nhưng WebKit 15 chỉ có thư mục iOS/15)
+          # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs
           if [ -d "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/15" ] && [ ! -e "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17" ]; then
             ln -s 15 WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17
           fi
 
           # 2. Vô hiệu hóa readline trong jsc.cpp vì iOS SDK không có readline/history.h
           sed -i '' 's/#if HAVE(READLINE)/#if 0/' Source/JavaScriptCore/jsc.cpp
+
+          # 2b. Sửa lỗi C++: không thể return nullptr cho hàm có kiểu trả về là bool
+          sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
           # 3. Link đầy đủ libWTF.a, libbmalloc.a cùng CoreFoundation, Foundation, libobjc và libicucore cho jsc và các tool test
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
