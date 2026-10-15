@@ -70,6 +70,9 @@ jobs:
           # 2b. Sửa lỗi C++: không thể return nullptr cho hàm bool
           sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
+          # 2c. Ép kiểu sang (id) để lách luật API_UNAVAILABLE của AVVideoPerformanceMetrics
+          sed -i '' 's/\[metrics /\[(id)metrics /g' Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm
+
           # 3. Link đầy đủ libWTF.a, libbmalloc.a...
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
