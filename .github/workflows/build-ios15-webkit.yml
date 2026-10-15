@@ -64,7 +64,7 @@ jobs:
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Ngăn lỗi trùng lặp SPI trong UIKitSPI.h, AVFoundationSPI.h và IOSurfaceSPI.h trên iOS 16+/17+ SDK
+          # 4. Ngăn lỗi trùng lặp SPI và thiếu header <functional> trên iOS 16+/17+ SDK (libc++ mới)
           python3 -c '
           import re
 
@@ -116,6 +116,24 @@ jobs:
           )
           with open(iosurf_path, "w") as f:
               f.write(iosurf)
+
+          # 4d. Bổ sung #include <functional> cho VP9UtilitiesCocoa.h và các Prefix Header
+          vp9_path = "Source/WebCore/platform/graphics/cocoa/VP9UtilitiesCocoa.h"
+          with open(vp9_path, "r") as f:
+              vp9 = f.read()
+          vp9 = vp9.replace("#pragma once\n", "#pragma once\n#include <functional>\n", 1)
+          with open(vp9_path, "w") as f:
+              f.write(vp9)
+
+          for prefix in ["Source/WebCore/WebCorePrefix.h", "Source/WebKit/WebKit2Prefix.h", "Source/WebKitLegacy/mac/WebKitPrefix.h"]:
+              try:
+                  with open(prefix, "r") as f:
+                      p = f.read()
+                  p += "\n#ifdef __cplusplus\n#include <functional>\n#endif\n"
+                  with open(prefix, "w") as f:
+                      f.write(p)
+              except FileNotFoundError:
+                  pass
           '
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
