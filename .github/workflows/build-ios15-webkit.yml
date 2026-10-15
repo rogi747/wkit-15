@@ -64,20 +64,20 @@ jobs:
             ln -s 15 WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17
           fi
 
-          # 2. Vô hiệu hóa readline trong jsc.cpp vì iOS SDK không có readline/history.h
+          # 2. Vô hiệu hóa readline trong jsc.cpp
           sed -i '' 's/#if HAVE(READLINE)/#if 0/' Source/JavaScriptCore/jsc.cpp
 
-          # 2b. Sửa lỗi C++: không thể return nullptr cho hàm có kiểu trả về là bool
+          # 2b. Sửa lỗi C++: không thể return nullptr cho hàm bool
           sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
-          # 3. Link đầy đủ libWTF.a, libbmalloc.a cùng CoreFoundation, Foundation, libobjc và libicucore cho jsc và các tool test
+          # 3. Link đầy đủ libWTF.a, libbmalloc.a...
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Ngăn lỗi trùng lặp SPI và thiếu header <functional> trên iOS 16+/17+ SDK
+          # 4. Xử lý xung đột SPI và tương thích C++
           python3 -c '
           import re
-
+          
           # 4a. Sửa UIKitSPI.h
           uikit_path = "Source/WebCore/PAL/pal/spi/ios/UIKitSPI.h"
           with open(uikit_path, "r") as f:
@@ -93,18 +93,8 @@ jobs:
           avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
           with open(avf_path, "r") as f:
               avf = f.read()
-          avf = re.sub(
-              r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;",
-              "// AVExternalContentProtectionStatus is already defined in SDK AVContentKeySession.h",
-              avf,
-              flags=re.DOTALL
-          )
-          avf = re.sub(
-              r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end",
-              "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif",
-              avf,
-              flags=re.DOTALL
-          )
+          avf = re.sub(r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;", "// AVExternalContentProtectionStatus is already defined", avf, flags=re.DOTALL)
+          avf = re.sub(r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end", "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif", avf, flags=re.DOTALL)
           with open(avf_path, "w") as f:
               f.write(avf)
 
@@ -112,22 +102,12 @@ jobs:
           iosurf_path = "Source/WebCore/PAL/pal/spi/cocoa/IOSurfaceSPI.h"
           with open(iosurf_path, "r") as f:
               iosurf = f.read()
-          iosurf = re.sub(
-              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerTags\s*\)\s*\{[^}]*\}\s*;",
-              "#include <IOSurface/IOSurfaceRef.h>",
-              iosurf,
-              flags=re.DOTALL
-          )
-          iosurf = re.sub(
-              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerFlags\s*\)\s*\{[^}]*\}\s*;",
-              "// IOSurfaceMemoryLedgerFlags is already defined in SDK IOSurfaceRef.h",
-              iosurf,
-              flags=re.DOTALL
-          )
+          iosurf = re.sub(r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerTags\s*\)\s*\{[^}]*\}\s*;", "#include <IOSurface/IOSurfaceRef.h>", iosurf, flags=re.DOTALL)
+          iosurf = re.sub(r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerFlags\s*\)\s*\{[^}]*\}\s*;", "// IOSurfaceMemoryLedgerFlags is already defined", iosurf, flags=re.DOTALL)
           with open(iosurf_path, "w") as f:
               f.write(iosurf)
 
-          # 4d. Bổ sung #include <functional> vào VP9UtilitiesCocoa.h và các Prefix Header
+          # 4d. Bổ sung <functional>
           vp9_path = "Source/WebCore/platform/graphics/cocoa/VP9UtilitiesCocoa.h"
           with open(vp9_path, "r") as f:
               vp9 = f.read()
@@ -144,6 +124,17 @@ jobs:
                       f.write(p)
               except FileNotFoundError:
                   pass
+
+          # 4e. Sửa NSAttributedStringSPI.h (ẩn các NSTextListMarker đã trở thành Public API)
+          nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
+          try:
+              with open(nsattr_path, "r") as f:
+                  nsattr = f.read()
+              nsattr = re.sub(r"(static\s+NSString\s*\*\s*const\s+NSTextListMarker)", r"// \1", nsattr)
+              with open(nsattr_path, "w") as f:
+                  f.write(nsattr)
+          except FileNotFoundError:
+              pass
           '
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
