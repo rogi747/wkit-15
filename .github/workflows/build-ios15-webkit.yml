@@ -1,74 +1,24 @@
-name: Build iOS 15 WebKit (manual)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: macos-14
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Select Xcode 15.4
-        run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app
-
-      - name: Alias python to python3
-        run: |
-          sudo ln -sf $(which python3) /usr/local/bin/python
-          python --version
-
-      - name: Fetch WebKit source
-        run: |
-          git clone --depth 1 --branch releases/Apple/Safari-15-iOS-15.0 https://github.com/WebKit/WebKit.git WebKit-15.0
-
-      - name: Copy shims and apply patch
-        run: |
-          # Copy scripts vào trong WebKit-15.0 (đồng thời giữ bản gốc ở ngoài) để mọi cấp ../../ hoặc ../../../ đều hợp lệ
-          cp -R scripts WebKit-15.0/
-
-          # Chuẩn hóa CRLF và khoảng trắng U+00A0 (nếu có) trước khi apply patch
-          python3 -c '
-          with open("ios15-port.patch", "rb") as f:
-              data = f.read().replace(b"\r\n", b"\n").replace(b"\xc2\xa0", b" ")
-          with open("ios15-port.patch", "wb") as f:
-              f.write(data)
-          '
-
-          # Apply patch
-          git -C WebKit-15.0 apply --verbose --ignore-space-change ../ios15-port.patch
-
-      - name: Build WebKit (device)
+- name: Build WebKit (device)
         run: |
           SHIM_INC="$(pwd)/scripts/abi-shims/include"
           ROOT_DIR="$(pwd)"
-
-          # 1b. Tạo header shim cho các file <objc/...> cũ đã bị xóa trên iOS 17.5 SDK
-          mkdir -p "${SHIM_INC}/objc"
-          echo '#include <objc/runtime.h>' > "${SHIM_INC}/objc/objc-class.h"
-          echo '#include <objc/runtime.h>' > "${SHIM_INC}/objc/objc-runtime.h"
-          cp -R "${SHIM_INC}/objc" "WebKit-15.0/scripts/abi-shims/include/"
-
           cd WebKit-15.0
 
-          # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs (vì Xcode 15.4 dùng SDK 17.5 nhưng WebKit 15 chỉ có thư mục iOS/15)
+          # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs
           if [ -d "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/15" ] && [ ! -e "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17" ]; then
             ln -s 15 WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17
           fi
 
-          # 2. Vô hiệu hóa readline trong jsc.cpp vì iOS SDK không có readline/history.h
+          # 2. Vô hiệu hóa readline trong jsc.cpp
           sed -i '' 's/#if HAVE(READLINE)/#if 0/' Source/JavaScriptCore/jsc.cpp
 
-          # 3. Link đầy đủ libWTF.a, libbmalloc.a cùng CoreFoundation, Foundation, libobjc và libicucore cho jsc và các tool test
+          # 3. Link đầy đủ libWTF.a, libbmalloc.a cùng CoreFoundation, Foundation, libobjc và libicucore cho jsc
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Ngăn lỗi trùng lặp SPI và thiếu header <functional> trên iOS 16+/17+ SDK (libc++ mới)
+          # 4. Ngăn lỗi trùng lặp SPI và thiếu header <functional>
           python3 -c '
           import re
-
-          # 4a. Sửa UIKitSPI.h
           uikit_path = "Source/WebCore/PAL/pal/spi/ios/UIKitSPI.h"
           with open(uikit_path, "r") as f:
               c = f.read()
@@ -79,45 +29,6 @@ jobs:
           with open(uikit_path, "w") as f:
               f.write(c)
 
-          # 4b. Sửa AVFoundationSPI.h
-          avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
-          with open(avf_path, "r") as f:
-              avf = f.read()
-          avf = re.sub(
-              r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;",
-              "// AVExternalContentProtectionStatus is already defined in SDK AVContentKeySession.h",
-              avf,
-              flags=re.DOTALL
-          )
-          avf = re.sub(
-              r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end",
-              "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif",
-              avf,
-              flags=re.DOTALL
-          )
-          with open(avf_path, "w") as f:
-              f.write(avf)
-
-          # 4c. Sửa IOSurfaceSPI.h
-          iosurf_path = "Source/WebCore/PAL/pal/spi/cocoa/IOSurfaceSPI.h"
-          with open(iosurf_path, "r") as f:
-              iosurf = f.read()
-          iosurf = re.sub(
-              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerTags\s*\)\s*\{[^}]*\}\s*;",
-              "#include <IOSurface/IOSurfaceRef.h>",
-              iosurf,
-              flags=re.DOTALL
-          )
-          iosurf = re.sub(
-              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerFlags\s*\)\s*\{[^}]*\}\s*;",
-              "// IOSurfaceMemoryLedgerFlags is already defined in SDK IOSurfaceRef.h",
-              iosurf,
-              flags=re.DOTALL
-          )
-          with open(iosurf_path, "w") as f:
-              f.write(iosurf)
-
-          # 4d. Bổ sung #include <functional> vào VP9UtilitiesCocoa.h và đầu khối __cplusplus của các Prefix Header (TRƯỚC khi macro new/delete được định nghĩa)
           vp9_path = "Source/WebCore/platform/graphics/cocoa/VP9UtilitiesCocoa.h"
           with open(vp9_path, "r") as f:
               vp9 = f.read()
@@ -136,9 +47,12 @@ jobs:
                   pass
           '
 
+          # Thêm đường dẫn include libxslt và libxml2 của SDK vào OTHER_CFLAGS / OTHER_CPLUSPLUSFLAGS
+          SDK_INC="/Applications/Xcode_15.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS17.5.sdk/usr/include"
+
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
-            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-error=strict-prototypes -Wno-strict-prototypes" \
-            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-enum-constexpr-conversion"
+            OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -I${SDK_INC}/libxslt -I${SDK_INC}/libxml2 -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-error=strict-prototypes -Wno-strict-prototypes" \
+            OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -I${SDK_INC}/libxslt -I${SDK_INC}/libxml2 -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-enum-constexpr-conversion"
