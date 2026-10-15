@@ -117,7 +117,7 @@ jobs:
           with open(iosurf_path, "w") as f:
               f.write(iosurf)
 
-          # 4d. Bổ sung #include <functional> cho VP9UtilitiesCocoa.h và các Prefix Header
+          # 4d. Bổ sung #include <functional> vào VP9UtilitiesCocoa.h và đầu khối __cplusplus của các Prefix Header (TRƯỚC khi macro new/delete được định nghĩa)
           vp9_path = "Source/WebCore/platform/graphics/cocoa/VP9UtilitiesCocoa.h"
           with open(vp9_path, "r") as f:
               vp9 = f.read()
@@ -129,7 +129,7 @@ jobs:
               try:
                   with open(prefix, "r") as f:
                       p = f.read()
-                  p += "\n#ifdef __cplusplus\n#include <functional>\n#endif\n"
+                  p = p.replace("#ifdef __cplusplus\n", "#ifdef __cplusplus\n#include <functional>\n", 1)
                   with open(prefix, "w") as f:
                       f.write(p)
               except FileNotFoundError:
