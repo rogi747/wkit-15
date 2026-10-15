@@ -43,6 +43,13 @@ jobs:
         run: |
           SHIM_INC="$(pwd)/scripts/abi-shims/include"
           ROOT_DIR="$(pwd)"
+
+          # 1b. Tạo header shim cho các file <objc/...> cũ đã bị xóa trên iOS 17.5 SDK
+          mkdir -p "${SHIM_INC}/objc"
+          echo '#include <objc/runtime.h>' > "${SHIM_INC}/objc/objc-class.h"
+          echo '#include <objc/runtime.h>' > "${SHIM_INC}/objc/objc-runtime.h"
+          cp -R "${SHIM_INC}/objc" "WebKit-15.0/scripts/abi-shims/include/"
+
           cd WebKit-15.0
 
           # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs (vì Xcode 15.4 dùng SDK 17.5 nhưng WebKit 15 chỉ có thư mục iOS/15)
@@ -76,14 +83,12 @@ jobs:
           avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
           with open(avf_path, "r") as f:
               avf = f.read()
-          # Xóa khối typedef NS_ENUM(NSInteger, AVExternalContentProtectionStatus) { ... }; vì đã có sẵn trong AVContentKeySession.h
           avf = re.sub(
               r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;",
               "// AVExternalContentProtectionStatus is already defined in SDK AVContentKeySession.h",
               avf,
               flags=re.DOTALL
           )
-          # Xóa khối @interface AVVideoPerformanceMetrics : NSObject ... @end và thay bằng Category để không xung đột với AVVideoPerformanceMetrics.h
           avf = re.sub(
               r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end",
               "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif",
@@ -92,19 +97,8 @@ jobs:
           )
           with open(avf_path, "w") as f:
               f.write(avf)
-
-          # Nếu trong SDK 17.5 các property trong AVVideoPerformanceMetrics.h bị gắn API_UNAVAILABLE, cung cấp Category method cho WebCore
-          with open(avf_path, "r") as f:
-              avf = f.read()
-          category_decl = """#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)
-          #import <AVFoundation/AVVideoPerformanceMetrics.h>
-          @interface AVVideoPerformanceMetrics (WebKitSPI)
-          - (unsigned long)_wk_totalNumberOfVideoFrames;
-          @end
-          #endif"""
           '
 
-          # Bỏ kiểm tra availability đối với các SPI cũ vừa bị Apple đánh dấu API_UNAVAILABLE trên SDK 17.5
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
