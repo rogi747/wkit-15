@@ -89,12 +89,12 @@ jobs:
           with open(uikit_path, "w") as f:
               f.write(c)
 
-          # 4b. Sửa AVFoundationSPI.h
+          # 4b. Sửa AVFoundationSPI.h (Sử dụng Category để bypass API_UNAVAILABLE)
           avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
           with open(avf_path, "r") as f:
               avf = f.read()
           avf = re.sub(r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;", "// AVExternalContentProtectionStatus is already defined", avf, flags=re.DOTALL)
-          avf = re.sub(r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end", "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif", avf, flags=re.DOTALL)
+          avf = avf.replace("@interface AVVideoPerformanceMetrics : NSObject", "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n@interface AVVideoPerformanceMetrics (WebKitSPI)\n#else\n@interface AVVideoPerformanceMetrics : NSObject\n#endif")
           with open(avf_path, "w") as f:
               f.write(avf)
 
