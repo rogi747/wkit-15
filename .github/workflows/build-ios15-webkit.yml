@@ -64,7 +64,7 @@ jobs:
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Ngăn lỗi trùng lặp SPI trong UIKitSPI.h và AVFoundationSPI.h trên iOS 16+/17+ SDK
+          # 4. Ngăn lỗi trùng lặp SPI trong UIKitSPI.h, AVFoundationSPI.h và IOSurfaceSPI.h trên iOS 16+/17+ SDK
           python3 -c '
           import re
 
@@ -97,6 +97,25 @@ jobs:
           )
           with open(avf_path, "w") as f:
               f.write(avf)
+
+          # 4c. Sửa IOSurfaceSPI.h
+          iosurf_path = "Source/WebCore/PAL/pal/spi/cocoa/IOSurfaceSPI.h"
+          with open(iosurf_path, "r") as f:
+              iosurf = f.read()
+          iosurf = re.sub(
+              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerTags\s*\)\s*\{[^}]*\}\s*;",
+              "#include <IOSurface/IOSurfaceRef.h>",
+              iosurf,
+              flags=re.DOTALL
+          )
+          iosurf = re.sub(
+              r"typedef\s+(?:CF_ENUM|NS_ENUM|CF_OPTIONS|NS_OPTIONS)\s*\([^,]+,\s*IOSurfaceMemoryLedgerFlags\s*\)\s*\{[^}]*\}\s*;",
+              "// IOSurfaceMemoryLedgerFlags is already defined in SDK IOSurfaceRef.h",
+              iosurf,
+              flags=re.DOTALL
+          )
+          with open(iosurf_path, "w") as f:
+              f.write(iosurf)
           '
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
