@@ -140,57 +140,98 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 4e. Xcode 15.4 / iOS 17.5 SDK already declares NSTextListMarker* in UIKit.
-          #     WebKit 15 carries old local fallback constants; keeping or renaming them can
-          #     collide when UIKit/NSTextList.h is pulled in later by UIKitSPI.h.
-          #     Use the SDK declarations directly. They are available on iOS 15.
+          # 4e. Backport cơ chế NSTextListMarker của WebKit 16.4.
+          #     Không tham chiếu trực tiếp các symbol UIKit vì WebCore không link UIKit.
+          #     Các marker thực tế nằm trong UIFoundation và WebKit mới dùng soft-link getter.
           nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
           with open(nsattr_path, "r") as f:
               nsattr = f.read()
 
-          # Import the public declaration BEFORE any possible compatibility macro.
-          anchor = "#import <UIKit/NSAttributedString.h>"
-          if "#import <UIKit/NSTextList.h>" not in nsattr:
-              if anchor not in nsattr:
-                  raise RuntimeError("Cannot find UIKit/NSAttributedString.h anchor in NSAttributedStringSPI.h")
-              nsattr = nsattr.replace(anchor, anchor + "\n#import <UIKit/NSTextList.h>", 1)
-
-          # Remove an older workaround shape, if present:
-          #   #define NSTextListMarkerCircle WK_NSTextListMarkerCircle
-          #   static NSString *const WK_NSTextListMarkerCircle = @"{circle}";
+          # Xóa mọi workaround/fallback cũ của các lượt build trước.
           nsattr = re.sub(
-              r"^\s*#define\s+NSTextListMarker\w+\s+WK_NSTextListMarker\w+\s*$",
+              r"^\s*#define\s+NSTextListMarker\w+\s+(?:WK_NSTextListMarker\w+|getNSTextListMarker\w+\(\))\s*$",
               "",
               nsattr,
               flags=re.MULTILINE,
           )
           nsattr = re.sub(
-              r"^\s*static\s+NSString\s*\*\s*const\s+WK_NSTextListMarker\w+\s*=\s*@\"[^\"]+\";\s*$",
+              r"^\s*static\s+(?:NSString\s*\*\s*const|NSTextListMarkerFormat\s+const)\s+(?:WK_)?NSTextListMarker\w+\s*=\s*@\"[^\"]+\";\s*$",
+              "",
+              nsattr,
+              flags=re.MULTILINE,
+          )
+          nsattr = re.sub(
+              r"^\s*SOFT_LINK_CONSTANT\(UIFoundation,\s*NSTextListMarker\w+,\s*NSTextListMarkerFormat\)\s*$",
               "",
               nsattr,
               flags=re.MULTILINE,
           )
 
-          # Remove the original WebKit-15 fallback constants. UIKit supplies these symbols.
-          nsattr = re.sub(
-              r"^\s*static\s+(?:NSString\s*\*\s*const|NSTextListMarkerFormat\s+const)\s+NSTextListMarker\w+\s*=\s*@\"[^\"]+\";\s*$",
-              "",
-              nsattr,
-              flags=re.MULTILINE,
-          )
+          marker_block = "\n".join([
+              "#import <UIKit/NSTextList.h>",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerCircle, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerCircle getNSTextListMarkerCircle()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerDisc, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerDisc getNSTextListMarkerDisc()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerSquare, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerSquare getNSTextListMarkerSquare()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerLowercaseHexadecimal, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerLowercaseHexadecimal getNSTextListMarkerLowercaseHexadecimal()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerUppercaseHexadecimal, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerUppercaseHexadecimal getNSTextListMarkerUppercaseHexadecimal()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerOctal, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerOctal getNSTextListMarkerOctal()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerLowercaseAlpha, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerLowercaseAlpha getNSTextListMarkerLowercaseAlpha()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerUppercaseAlpha, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerUppercaseAlpha getNSTextListMarkerUppercaseAlpha()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerLowercaseLatin, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerLowercaseLatin getNSTextListMarkerLowercaseLatin()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerUppercaseLatin, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerUppercaseLatin getNSTextListMarkerUppercaseLatin()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerLowercaseRoman, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerLowercaseRoman getNSTextListMarkerLowercaseRoman()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerUppercaseRoman, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerUppercaseRoman getNSTextListMarkerUppercaseRoman()",
+              "SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarkerDecimal, NSTextListMarkerFormat)",
+              "#define NSTextListMarkerDecimal getNSTextListMarkerDecimal()",
+          ])
+
+          # Đặt block sau NSTextAlternativesAttributeName, cùng vị trí upstream WebKit 16.4.
+          anchor = "#define NSTextAlternativesAttributeName getNSTextAlternativesAttributeName()"
+          if anchor not in nsattr:
+              raise RuntimeError("Cannot find NSTextAlternativesAttributeName anchor in NSAttributedStringSPI.h")
+          nsattr = nsattr.replace(anchor, anchor + "\n" + marker_block, 1)
 
           with open(nsattr_path, "w") as f:
               f.write(nsattr)
 
-          # Fail early if a stale local marker workaround survived. Hard compiler errors are
-          # preferable to silently compiling a mixed SDK/local declaration state.
-          bad = [
-              line for line in nsattr.splitlines()
-              if "WK_NSTextListMarker" in line
-              or re.match(r"^\s*static\s+.*NSTextListMarker", line)
-          ]
-          if bad:
-              raise RuntimeError("Stale NSTextListMarker workaround remains: " + " | ".join(bad))
+          # Preflight: phải có đủ 13 soft-link constants và không còn local static/WK alias.
+          softlinked = re.findall(
+              r"SOFT_LINK_CONSTANT\(UIFoundation,\s*(NSTextListMarker\w+),\s*NSTextListMarkerFormat\)",
+              nsattr,
+          )
+          expected_markers = {
+              "NSTextListMarkerCircle",
+              "NSTextListMarkerDisc",
+              "NSTextListMarkerSquare",
+              "NSTextListMarkerLowercaseHexadecimal",
+              "NSTextListMarkerUppercaseHexadecimal",
+              "NSTextListMarkerOctal",
+              "NSTextListMarkerLowercaseAlpha",
+              "NSTextListMarkerUppercaseAlpha",
+              "NSTextListMarkerLowercaseLatin",
+              "NSTextListMarkerUppercaseLatin",
+              "NSTextListMarkerLowercaseRoman",
+              "NSTextListMarkerUppercaseRoman",
+              "NSTextListMarkerDecimal",
+          }
+          if set(softlinked) != expected_markers:
+              raise RuntimeError("NSTextListMarker soft-link set mismatch: " + repr(softlinked))
+          if "WK_NSTextListMarker" in nsattr:
+              raise RuntimeError("Stale WK_NSTextListMarker workaround remains")
+          if re.search(r"^\s*static\s+.*NSTextListMarker", nsattr, flags=re.MULTILINE):
+              raise RuntimeError("Stale static NSTextListMarker fallback remains")
 
           # 4f. Ép kiểu [metrics ...] sang [(id<WKAVVideoPerformanceMetricsSPI>)metrics ...] trong cả 2 file MediaPlayerPrivate
           files_to_fix = [
@@ -213,8 +254,12 @@ jobs:
               f.write(jsc_h)
           '
 
-          echo '=== Verify NSTextList compatibility patch ==='
-          grep -nE 'UIKit/NSTextList.h|NSTextListMarker|WK_NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h || true
+          echo '=== Verify NSTextList soft-link backport ==='
+          grep -nE 'UIKit/NSTextList.h|SOFT_LINK_CONSTANT\(UIFoundation, NSTextListMarker|#define NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h || true
+          test "$(grep -c 'SOFT_LINK_CONSTANT(UIFoundation, NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h)" -eq 13 || {
+            echo 'ERROR: expected exactly 13 NSTextListMarker soft-links' >&2
+            exit 1
+          }
           if grep -q 'WK_NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h; then
             echo 'ERROR: stale WK_NSTextListMarker workaround remains' >&2
             exit 1
