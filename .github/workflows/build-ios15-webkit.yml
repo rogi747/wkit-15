@@ -70,9 +70,9 @@ jobs:
           # 2b. Sửa lỗi C++: không thể return nullptr cho hàm bool
           sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
-          # 3. Link đầy đủ libWTF.a, libbmalloc.a...
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
+          # 3. Khôi phục -force_load libWTF.a vào JavaScriptCore.framework (để xuất đầy đủ WTF::MediaTime và các symbol WTF cho WebCore, WebKit, jsc)
+          echo 'OTHER_LDFLAGS_BASE = $(OTHER_LDFLAGS_HIDE_SYMBOLS) -force_load "$(BUILT_PRODUCTS_DIR)/libWTF.a" -force_load "$(BUILT_PRODUCTS_DIR)/libbmalloc.a"' >> Source/JavaScriptCore/Configurations/JavaScriptCore.xcconfig
+          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/WebCore/Configurations/WebCore.xcconfig
 
           # 4. Xử lý xung đột SPI, tương thích C++ và Availability
           python3 -c '
