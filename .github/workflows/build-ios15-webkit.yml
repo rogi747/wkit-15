@@ -140,23 +140,57 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 4e. Ẩn static NSTextListMarker trong NSAttributedStringSPI.h và định nghĩa symbol toàn cục vào WebKitAdditionsABIShimIOS.mm
+          # 4e. Xcode 15.4 / iOS 17.5 SDK already declares NSTextListMarker* in UIKit.
+          #     WebKit 15 carries old local fallback constants; keeping or renaming them can
+          #     collide when UIKit/NSTextList.h is pulled in later by UIKitSPI.h.
+          #     Use the SDK declarations directly. They are available on iOS 15.
           nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
           with open(nsattr_path, "r") as f:
               nsattr = f.read()
-          # Trích xuất tất cả các dòng static NSString *const NSTextListMarker... = @"..."; để chuyển thành biến non-static
-          markers = re.findall(r"static\s+(NSString\s*\*\s*const\s+NSTextListMarker\w+\s*=\s*@\"[^\"]+\";)", nsattr)
-          nsattr = re.sub(r"(static\s+NSString\s*\*\s*const\s+NSTextListMarker)", r"#import <UIKit/NSTextList.h>\n// \1", nsattr)
+
+          # Import the public declaration BEFORE any possible compatibility macro.
+          anchor = "#import <UIKit/NSAttributedString.h>"
+          if "#import <UIKit/NSTextList.h>" not in nsattr:
+              if anchor not in nsattr:
+                  raise RuntimeError("Cannot find UIKit/NSAttributedString.h anchor in NSAttributedStringSPI.h")
+              nsattr = nsattr.replace(anchor, anchor + "\n#import <UIKit/NSTextList.h>", 1)
+
+          # Remove an older workaround shape, if present:
+          #   #define NSTextListMarkerCircle WK_NSTextListMarkerCircle
+          #   static NSString *const WK_NSTextListMarkerCircle = @"{circle}";
+          nsattr = re.sub(
+              r"^\s*#define\s+NSTextListMarker\w+\s+WK_NSTextListMarker\w+\s*$",
+              "",
+              nsattr,
+              flags=re.MULTILINE,
+          )
+          nsattr = re.sub(
+              r"^\s*static\s+NSString\s*\*\s*const\s+WK_NSTextListMarker\w+\s*=\s*@\"[^\"]+\";\s*$",
+              "",
+              nsattr,
+              flags=re.MULTILINE,
+          )
+
+          # Remove the original WebKit-15 fallback constants. UIKit supplies these symbols.
+          nsattr = re.sub(
+              r"^\s*static\s+(?:NSString\s*\*\s*const|NSTextListMarkerFormat\s+const)\s+NSTextListMarker\w+\s*=\s*@\"[^\"]+\";\s*$",
+              "",
+              nsattr,
+              flags=re.MULTILINE,
+          )
+
           with open(nsattr_path, "w") as f:
               f.write(nsattr)
 
-          shim_defs = "\n// NSTextListMarker symbols for iOS 15 compatibility\n" + "\n".join(markers) + "\n"
-          for shim_mm in ["scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm", "../scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm"]:
-              try:
-                  with open(shim_mm, "a") as f:
-                      f.write(shim_defs)
-              except FileNotFoundError:
-                  pass
+          # Fail early if a stale local marker workaround survived. Hard compiler errors are
+          # preferable to silently compiling a mixed SDK/local declaration state.
+          bad = [
+              line for line in nsattr.splitlines()
+              if "WK_NSTextListMarker" in line
+              or re.match(r"^\s*static\s+.*NSTextListMarker", line)
+          ]
+          if bad:
+              raise RuntimeError("Stale NSTextListMarker workaround remains: " + " | ".join(bad))
 
           # 4f. Ép kiểu [metrics ...] sang [(id<WKAVVideoPerformanceMetricsSPI>)metrics ...] trong cả 2 file MediaPlayerPrivate
           files_to_fix = [
@@ -178,6 +212,17 @@ jobs:
           with open(jsclass_path, "w") as f:
               f.write(jsc_h)
           '
+
+          echo '=== Verify NSTextList compatibility patch ==='
+          grep -nE 'UIKit/NSTextList.h|NSTextListMarker|WK_NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h || true
+          if grep -q 'WK_NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h; then
+            echo 'ERROR: stale WK_NSTextListMarker workaround remains' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*static .*NSTextListMarker' Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h; then
+            echo 'ERROR: stale static NSTextListMarker fallback remains' >&2
+            exit 1
+          fi
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
