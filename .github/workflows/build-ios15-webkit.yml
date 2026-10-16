@@ -74,7 +74,7 @@ jobs:
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
 
-          # 4. Xử lý xung đột SPI và tương thích C++
+          # 4. Xử lý xung đột SPI, tương thích C++ và Availability
           python3 -c '
           import re
           
@@ -89,32 +89,12 @@ jobs:
           with open(uikit_path, "w") as f:
               f.write(c)
 
-          # 4b. Sửa AVFoundationSPI.h (Sử dụng Category để bypass API_UNAVAILABLE một cách trọn vẹn và an toàn)
+          # 4b. Sửa AVFoundationSPI.h
           avf_path = "Source/WebCore/PAL/pal/spi/cocoa/AVFoundationSPI.h"
           with open(avf_path, "r") as f:
               avf = f.read()
           avf = re.sub(r"typedef\s+NS_ENUM\s*\(\s*NSInteger\s*,\s*AVExternalContentProtectionStatus\s*\)\s*\{[^}]*\}\s*;", "// AVExternalContentProtectionStatus is already defined", avf, flags=re.DOTALL)
-          
-          category_str = """#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)
-          #import <AVFoundation/AVVideoPerformanceMetrics.h>
-          @interface AVVideoPerformanceMetrics (WebKitSPI)
-          @property (nonatomic, readonly) unsigned long totalNumberOfVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfDroppedVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfCorruptedVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfDisplayCompositedVideoFrames;
-          @property (nonatomic, readonly) double totalFrameDelay;
-          @end
-          #else
-          @interface AVVideoPerformanceMetrics : NSObject
-          @property (nonatomic, readonly) unsigned long totalNumberOfVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfDroppedVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfCorruptedVideoFrames;
-          @property (nonatomic, readonly) unsigned long numberOfDisplayCompositedVideoFrames;
-          @property (nonatomic, readonly) double totalFrameDelay;
-          @end
-          #endif"""
-          
-          avf = re.sub(r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end", category_str, avf, flags=re.DOTALL)
+          avf = re.sub(r"@interface\s+AVVideoPerformanceMetrics\s*:\s*NSObject.*?@end", "#if __has_include(<AVFoundation/AVVideoPerformanceMetrics.h>)\n#import <AVFoundation/AVVideoPerformanceMetrics.h>\n#endif", avf, flags=re.DOTALL)
           with open(avf_path, "w") as f:
               f.write(avf)
 
@@ -145,7 +125,7 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 4e. Sửa NSAttributedStringSPI.h (ẩn các NSTextListMarker đã trở thành Public API)
+          # 4e. Sửa NSAttributedStringSPI.h
           nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
           try:
               with open(nsattr_path, "r") as f:
@@ -155,6 +135,25 @@ jobs:
                   f.write(nsattr)
           except FileNotFoundError:
               pass
+              
+          # 4f. Chèn #pragma clang diagnostic ignored "-Wavailability" vào các file mm gọi AVVideoPerformanceMetrics
+          files_to_fix = [
+              "Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm",
+              "Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm"
+          ]
+          for file in files_to_fix:
+              try:
+                  with open(file, "r") as f:
+                      content = f.read()
+                  
+                  # Chèn pragma push trước khối include đầu tiên
+                  pragma_str = "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wavailability\"\n\n"
+                  content = pragma_str + content + "\n#pragma clang diagnostic pop\n"
+                  
+                  with open(file, "w") as f:
+                      f.write(content)
+              except FileNotFoundError:
+                  pass
           '
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
