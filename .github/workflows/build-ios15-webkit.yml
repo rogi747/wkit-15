@@ -269,6 +269,16 @@ jobs:
             exit 1
           fi
 
+          echo '=== Verify VTRestrictVideoDecoders is owned only by PAL ==='
+          if grep -nE 'softLinkVideoToolboxVTRestrictVideoDecoders|canLoad_VideoToolbox_VTRestrictVideoDecoders' scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm; then
+            echo 'ERROR: stale VTRestrictVideoDecoders ABI shim would duplicate libPAL.a' >&2
+            exit 1
+          fi
+          grep -n 'VTRestrictVideoDecoders' Source/WebCore/PAL/pal/cf/VideoToolboxSoftLink.cpp || {
+            echo 'ERROR: PAL VideoToolboxSoftLink.cpp no longer provides VTRestrictVideoDecoders' >&2
+            exit 1
+          }
+
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
