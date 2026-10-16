@@ -140,18 +140,24 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 4e. Sửa NSAttributedStringSPI.h: Đổi tên các biến static NSTextListMarker... bằng macro để vừa không đụng độ SDK 17.5 vừa có sẵn symbol cho iOS 15
+          # 4e. Ẩn static NSTextListMarker trong NSAttributedStringSPI.h và định nghĩa symbol toàn cục vào WebKitAdditionsABIShimIOS.mm
           nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
           with open(nsattr_path, "r") as f:
               nsattr = f.read()
-          nsattr = re.sub(
-              r"static\s+NSString\s*\*\s*const\s+(NSTextListMarker\w+)\s*=",
-              r"#define \1 WK_\1\nstatic NSString *const WK_\1 =",
-              nsattr
-          )
+          # Trích xuất tất cả các dòng static NSString *const NSTextListMarker... = @"..."; để chuyển thành biến non-static
+          markers = re.findall(r"static\s+(NSString\s*\*\s*const\s+NSTextListMarker\w+\s*=\s*@\"[^\"]+\";)", nsattr)
+          nsattr = re.sub(r"(static\s+NSString\s*\*\s*const\s+NSTextListMarker)", r"#import <UIKit/NSTextList.h>\n// \1", nsattr)
           with open(nsattr_path, "w") as f:
               f.write(nsattr)
-              
+
+          shim_defs = "\n// NSTextListMarker symbols for iOS 15 compatibility\n" + "\n".join(markers) + "\n"
+          for shim_mm in ["scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm", "../scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm"]:
+              try:
+                  with open(shim_mm, "a") as f:
+                      f.write(shim_defs)
+              except FileNotFoundError:
+                  pass
+
           # 4f. Ép kiểu [metrics ...] sang [(id<WKAVVideoPerformanceMetricsSPI>)metrics ...] trong cả 2 file MediaPlayerPrivate
           files_to_fix = [
               "Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm",
