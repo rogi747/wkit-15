@@ -252,6 +252,41 @@ jobs:
           jsc_h = jsc_h.replace("~OpaqueJSClassContextData();", "JS_EXPORT_PRIVATE ~OpaqueJSClassContextData();")
           with open(jsclass_path, "w") as f:
               f.write(jsc_h)
+
+          # 4h. Gỡ ABI shim VTRestrictVideoDecoders cũ tại runtime.
+          #     PAL/VideoToolboxSoftLink.cpp đã sở hữu hai symbol này; giữ shim sẽ duplicate khi link WebCore.
+          vt_shim_path = "scripts/abi-shims/src/WebKitAdditionsABIShimIOS.mm"
+          with open(vt_shim_path, "r") as f:
+              vt_shim = f.read()
+
+          vt_shim = re.sub(
+              r"(?ms)^extern\s+\"C\"\s+__attribute__\(\(used,\s*visibility\(\"default\"\)\)\)\s*\n"
+              r"void\*\s+palABIShimSoftLinkVTRestrictVideoDecoders\s*\n"
+              r"\s*asm\(\"__ZN3PAL43softLinkVideoToolboxVTRestrictVideoDecodersE\"\)\s*=\s*nullptr;\s*\n?",
+              "",
+              vt_shim,
+          )
+          vt_shim = re.sub(
+              r"(?ms)^extern\s+\"C\"\s+bool\s+palABIShimCanLoadVTRestrictVideoDecoders\(\)\s*\n"
+              r"\s*__attribute__\(\(used,\s*visibility\(\"default\"\)\)\)\s*\n"
+              r"\s*asm\(\"__ZN3PAL44canLoad_VideoToolbox_VTRestrictVideoDecodersEv\"\);\s*\n"
+              r"\s*bool\s+palABIShimCanLoadVTRestrictVideoDecoders\(\)\s*\{\s*return\s+false;\s*\}\s*\n?",
+              "",
+              vt_shim,
+          )
+
+          stale_vt = [
+              "__ZN3PAL43softLinkVideoToolboxVTRestrictVideoDecodersE",
+              "__ZN3PAL44canLoad_VideoToolbox_VTRestrictVideoDecodersEv",
+              "palABIShimSoftLinkVTRestrictVideoDecoders",
+              "palABIShimCanLoadVTRestrictVideoDecoders",
+          ]
+          leftovers = [name for name in stale_vt if name in vt_shim]
+          if leftovers:
+              raise RuntimeError("Failed to remove stale VTRestrictVideoDecoders ABI shim: " + repr(leftovers))
+
+          with open(vt_shim_path, "w") as f:
+              f.write(vt_shim)
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
