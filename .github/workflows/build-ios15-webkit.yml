@@ -287,6 +287,30 @@ jobs:
 
           with open(vt_shim_path, "w") as f:
               f.write(vt_shim)
+
+          # 4i. Gỡ Objective-C class chết WTFWebFileManagerDelegate khỏi WTF.
+          #     libWTF.a được link vào WebCore, nên metadata ObjC của class này lọt vào
+          #     WebCore.framework và vi phạm rule prefix chỉ cho phép Web / __ARCLite.
+          #     Class này không được tham chiếu trong FileSystemCocoa.mm.
+          wtf_fs_path = "Source/WTF/wtf/cocoa/FileSystemCocoa.mm"
+          with open(wtf_fs_path, "r") as f:
+              wtf_fs = f.read()
+
+          delegate_pattern = (
+              r"(?ms)^@interface\s+WTFWebFileManagerDelegate\s*:\s*NSObject\s*<NSFileManagerDelegate>\s*\n"
+              r"@end\s*\n\s*"
+              r"@implementation\s+WTFWebFileManagerDelegate\s*\n"
+              r".*?"
+              r"^@end\s*\n"
+          )
+          wtf_fs, delegate_count = re.subn(delegate_pattern, "", wtf_fs, count=1)
+          if delegate_count != 1:
+              raise RuntimeError("Expected exactly one WTFWebFileManagerDelegate block, removed " + str(delegate_count))
+          if "WTFWebFileManagerDelegate" in wtf_fs:
+              raise RuntimeError("WTFWebFileManagerDelegate remains after compatibility patch")
+
+          with open(wtf_fs_path, "w") as f:
+              f.write(wtf_fs)
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -313,6 +337,13 @@ jobs:
             echo 'ERROR: PAL VideoToolboxSoftLink.cpp no longer provides VTRestrictVideoDecoders' >&2
             exit 1
           }
+
+          echo '=== Verify WebCore Objective-C class namespace compatibility ==='
+          if grep -n 'WTFWebFileManagerDelegate' Source/WTF/wtf/cocoa/FileSystemCocoa.mm; then
+            echo 'ERROR: WTFWebFileManagerDelegate would violate WebCore Objective-C prefix validation' >&2
+            exit 1
+          fi
+          echo 'OK: dead WTFWebFileManagerDelegate removed before linking WebCore'
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
