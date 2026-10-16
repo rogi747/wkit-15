@@ -70,7 +70,7 @@ jobs:
           # 2b. Sửa lỗi C++: không thể return nullptr cho hàm bool
           sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
-          # 3. Link bổ sung libWTF.a (KHÔNG dùng -force_load để tránh duplicate symbols) cho jsc, WebCore, WebKitLegacy và WebKit
+          # 3. Link bổ sung libWTF.a (KHÔNG dùng -force_load) cho jsc, WebCore, WebKitLegacy và WebKit
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebCore/Configurations/WebCore.xcconfig
@@ -140,16 +140,17 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 4e. Sửa NSAttributedStringSPI.h
+          # 4e. Sửa NSAttributedStringSPI.h: Đổi tên các biến static NSTextListMarker... bằng macro để vừa không đụng độ SDK 17.5 vừa có sẵn symbol cho iOS 15
           nsattr_path = "Source/WebCore/PAL/pal/spi/cocoa/NSAttributedStringSPI.h"
-          try:
-              with open(nsattr_path, "r") as f:
-                  nsattr = f.read()
-              nsattr = re.sub(r"(static\s+NSString\s*\*\s*const\s+NSTextListMarker)", r"// \1", nsattr)
-              with open(nsattr_path, "w") as f:
-                  f.write(nsattr)
-          except FileNotFoundError:
-              pass
+          with open(nsattr_path, "r") as f:
+              nsattr = f.read()
+          nsattr = re.sub(
+              r"static\s+NSString\s*\*\s*const\s+(NSTextListMarker\w+)\s*=",
+              r"#define \1 WK_\1\nstatic NSString *const WK_\1 =",
+              nsattr
+          )
+          with open(nsattr_path, "w") as f:
+              f.write(nsattr)
               
           # 4f. Ép kiểu [metrics ...] sang [(id<WKAVVideoPerformanceMetricsSPI>)metrics ...] trong cả 2 file MediaPlayerPrivate
           files_to_fix = [
@@ -162,6 +163,14 @@ jobs:
               content = content.replace("[metrics ", "[(id<WKAVVideoPerformanceMetricsSPI>)metrics ")
               with open(file, "w") as f:
                   f.write(content)
+
+          # 4g. Thêm JS_EXPORT_PRIVATE cho ~OpaqueJSClassContextData() trong JSClassRef.h để xuất symbol cho WebCore
+          jsclass_path = "Source/JavaScriptCore/API/JSClassRef.h"
+          with open(jsclass_path, "r") as f:
+              jsc_h = f.read()
+          jsc_h = jsc_h.replace("~OpaqueJSClassContextData();", "JS_EXPORT_PRIVATE ~OpaqueJSClassContextData();")
+          with open(jsclass_path, "w") as f:
+              f.write(jsc_h)
           '
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
