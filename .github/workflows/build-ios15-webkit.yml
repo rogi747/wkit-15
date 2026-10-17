@@ -439,6 +439,23 @@ jobs:
               raise RuntimeError("Unexpected WEBKITADDITIONS_HEADER_SEARCH_PATHS test in generate-derived-sources.sh")
           with open(derived_script_path, "w") as f:
               f.write(derived_script)
+          # 4m. Safari 15 keeps event modifiers as WebEvent::Modifier.
+          #     ios15-port.patch adds a fallback WebTouchEvent for !ENABLE(TOUCH_EVENTS);
+          #     do not use the newer standalone WebEventModifier type from later WebKit.
+          webtouch_path = "Source/WebKit/Shared/WebTouchEvent.h"
+          with open(webtouch_path, "r") as f:
+              webtouch = f.read()
+          stale_modifier = "OptionSet<WebEventModifier> m_modifiers;"
+          safari15_modifier = "OptionSet<WebEvent::Modifier> m_modifiers;"
+          if stale_modifier in webtouch:
+              webtouch = webtouch.replace(stale_modifier, safari15_modifier, 1)
+          if stale_modifier in webtouch:
+              raise RuntimeError("stale WebEventModifier remains in WebTouchEvent fallback")
+          if safari15_modifier not in webtouch:
+              raise RuntimeError("Safari 15 WebTouchEvent fallback modifier field not found")
+          with open(webtouch_path, "w") as f:
+              f.write(webtouch)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -482,6 +499,17 @@ jobs:
             }
           done
           echo 'OK: WebKitLegacy TAPI sees all migrated WebCore headers'
+
+          echo '=== Verify Safari 15 WebTouchEvent modifier type ==='
+          if grep -n 'OptionSet<WebEventModifier> m_modifiers' Source/WebKit/Shared/WebTouchEvent.h; then
+            echo 'ERROR: ios15 fallback uses newer WebEventModifier type unavailable in Safari 15' >&2
+            exit 1
+          fi
+          grep -n 'OptionSet<WebEvent::Modifier> m_modifiers' Source/WebKit/Shared/WebTouchEvent.h || {
+            echo 'ERROR: Safari 15 WebEvent::Modifier fallback field is missing' >&2
+            exit 1
+          }
+          echo 'OK: WebTouchEvent fallback uses Safari 15 WebEvent::Modifier'
 
           echo '=== Verify Inspector codegen Python 3 flattened imports ==='
           grep -n 'except (ImportError, ValueError):' \
