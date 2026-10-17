@@ -378,6 +378,67 @@ jobs:
               raise RuntimeError("TAPI semicolon is still attached to TestingFunctions.h")
           if not final_tapi_line.endswith(";"):
               raise RuntimeError("Patched OTHER_TAPI_FLAGS lost its final xcconfig semicolon")
+
+          # 4k. Python 3 compatibility cho Inspector code generator khi JavaScriptCore
+          #     private headers bị flatten. Safari 15 dùng Python 2 semantics: relative
+          #     import ngoài package ném ValueError; Python 3 ném ImportError. Vì vậy
+          #     các fallback import cũ không chạy trên Xcode 15 / Python 3.
+          codegen_dir = "Source/JavaScriptCore/inspector/scripts/codegen"
+          patched_codegen_files = []
+
+          for codegen_path in sorted(__import__("glob").glob(codegen_dir + "/*.py")):
+              with open(codegen_path, "r") as f:
+                  lines = f.readlines()
+
+              changed = 0
+              for i, line in enumerate(lines):
+                  match = re.match(r"^(\s*)except ValueError:\s*$", line.rstrip("\n"))
+                  if not match:
+                      continue
+
+                  indent = match.group(1)
+                  # Find the matching top-level try block at the same indentation.
+                  for j in range(i - 1, -1, -1):
+                      candidate = lines[j].rstrip("\n")
+                      if candidate == indent + "try:":
+                          import_block = "".join(lines[j + 1:i])
+                          if "from ." in import_block:
+                              newline = "\n" if line.endswith("\n") else ""
+                              lines[i] = indent + "except (ImportError, ValueError):" + newline
+                              changed += 1
+                          break
+
+              if changed:
+                  with open(codegen_path, "w") as f:
+                      f.writelines(lines)
+                  patched_codegen_files.append((codegen_path, changed))
+
+          required_py3_files = [
+              codegen_dir + "/generator.py",
+              codegen_dir + "/cpp_generator.py",
+              codegen_dir + "/objc_generator.py",
+          ]
+          for codegen_path in required_py3_files:
+              with open(codegen_path, "r") as f:
+                  codegen_text = f.read()
+              if "except (ImportError, ValueError):" not in codegen_text:
+                  raise RuntimeError("Python 3 flattened-import compatibility patch missing in " + codegen_path)
+
+          print("Patched inspector codegen Python 3 imports:", patched_codegen_files)
+
+          # 4l. Quote WebKitAdditions header search paths. Safari 15 used an unquoted
+          #     [ ! -z $VAR ] test which breaks when Xcode 15 supplies multiple paths.
+          derived_script_path = "Source/WebKit/Scripts/generate-derived-sources.sh"
+          with open(derived_script_path, "r") as f:
+              derived_script = f.read()
+          old_webkitadditions_test = "if [ ! -z ${WEBKITADDITIONS_HEADER_SEARCH_PATHS} ]; then"
+          new_webkitadditions_test = "if [ -n \"${WEBKITADDITIONS_HEADER_SEARCH_PATHS:-}\" ]; then"
+          if old_webkitadditions_test in derived_script:
+              derived_script = derived_script.replace(old_webkitadditions_test, new_webkitadditions_test, 1)
+          elif new_webkitadditions_test not in derived_script:
+              raise RuntimeError("Unexpected WEBKITADDITIONS_HEADER_SEARCH_PATHS test in generate-derived-sources.sh")
+          with open(derived_script_path, "w") as f:
+              f.write(derived_script)
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -421,6 +482,22 @@ jobs:
             }
           done
           echo 'OK: WebKitLegacy TAPI sees all migrated WebCore headers'
+
+          echo '=== Verify Inspector codegen Python 3 flattened imports ==='
+          grep -n 'except (ImportError, ValueError):' \
+            Source/JavaScriptCore/inspector/scripts/codegen/generator.py \
+            Source/JavaScriptCore/inspector/scripts/codegen/cpp_generator.py \
+            Source/JavaScriptCore/inspector/scripts/codegen/objc_generator.py
+          rm -rf /tmp/webkit-inspector-codegen-flat
+          mkdir -p /tmp/webkit-inspector-codegen-flat
+          cp Source/JavaScriptCore/inspector/scripts/generate-inspector-protocol-bindings.py /tmp/webkit-inspector-codegen-flat/
+          cp Source/JavaScriptCore/inspector/scripts/codegen/*.py /tmp/webkit-inspector-codegen-flat/
+          (cd /tmp/webkit-inspector-codegen-flat && python3 generate-inspector-protocol-bindings.py --help >/dev/null) || {
+            echo 'ERROR: Inspector protocol generator still cannot run from flattened JavaScriptCore private headers' >&2
+            exit 1
+          }
+          grep -n 'WEBKITADDITIONS_HEADER_SEARCH_PATHS' Source/WebKit/Scripts/generate-derived-sources.sh
+          echo 'OK: Inspector generator imports cleanly under Python 3'
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
