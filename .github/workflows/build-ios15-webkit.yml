@@ -345,12 +345,22 @@ jobs:
               raise RuntimeError("Expected exactly one iPhone OTHER_TAPI_FLAGS line in WebKitLegacy.xcconfig, found " + str(len(tapi_lines)))
 
           old_tapi_line = tapi_lines[0]
-          new_tapi_line = old_tapi_line
+
+          # xcconfig uses the final semicolon as the statement terminator.  Do not
+          # append new flags after it: Xcode would then pass the semicolon as part
+          # of TestingFunctions.h (TestingFunctions.h;), which TAPI treats as a
+          # different, non-existent filename.
+          tapi_body = old_tapi_line.rstrip()
+          if not tapi_body.endswith(";"):
+              raise RuntimeError("Expected OTHER_TAPI_FLAGS to end with an xcconfig semicolon")
+          tapi_body = tapi_body[:-1].rstrip()
+
           for header in tapi_headers:
               flag = " -extra-private-header $(BUILT_PRODUCTS_DIR)/$(PRIVATE_HEADERS_FOLDER_PATH)/" + header
-              if flag not in new_tapi_line:
-                  new_tapi_line += flag
+              if flag not in tapi_body:
+                  tapi_body += flag
 
+          new_tapi_line = tapi_body + ";"
           legacy_xcconfig = legacy_xcconfig.replace(old_tapi_line, new_tapi_line, 1)
           with open(legacy_xcconfig_path, "w") as f:
               f.write(legacy_xcconfig)
@@ -359,6 +369,15 @@ jobs:
               expected = "-extra-private-header $(BUILT_PRODUCTS_DIR)/$(PRIVATE_HEADERS_FOLDER_PATH)/" + header
               if expected not in legacy_xcconfig:
                   raise RuntimeError("Missing WebKitLegacy TAPI migrated header flag: " + header)
+
+          final_tapi_lines = [line for line in legacy_xcconfig.splitlines() if line.startswith(tapi_prefix)]
+          if len(final_tapi_lines) != 1:
+              raise RuntimeError("Unexpected OTHER_TAPI_FLAGS line count after patch")
+          final_tapi_line = final_tapi_lines[0]
+          if "TestingFunctions.h; -extra-private-header" in final_tapi_line:
+              raise RuntimeError("TAPI semicolon is still attached to TestingFunctions.h")
+          if not final_tapi_line.endswith(";"):
+              raise RuntimeError("Patched OTHER_TAPI_FLAGS lost its final xcconfig semicolon")
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
