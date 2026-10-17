@@ -456,6 +456,21 @@ jobs:
           with open(webtouch_path, "w") as f:
               f.write(webtouch)
 
+          # 4n. Safari 15 owns resetPotentialTapSecurityOrigin only when
+          #     ENABLE(IOS_TOUCH_EVENTS). A prior compatibility hunk added a
+          #     definition under !ENABLE(IOS_TOUCH_EVENTS), while WebPage.h has no
+          #     declaration there. Remove that dead fallback at runtime as well.
+          webpage_cpp_path = "Source/WebKit/WebProcess/WebPage/WebPage.cpp"
+          with open(webpage_cpp_path, "r") as f:
+              webpage_cpp = f.read()
+          stale_reset_block = "#if PLATFORM(IOS_FAMILY) && !ENABLE(IOS_TOUCH_EVENTS)\nvoid WebPage::resetPotentialTapSecurityOrigin()\n{\n    m_potentialTapSecurityOrigin = nullptr;\n}\n#endif\n\n"
+          if stale_reset_block in webpage_cpp:
+              webpage_cpp = webpage_cpp.replace(stale_reset_block, "", 1)
+          if stale_reset_block in webpage_cpp:
+              raise RuntimeError("stale resetPotentialTapSecurityOrigin fallback remains")
+          with open(webpage_cpp_path, "w") as f:
+              f.write(webpage_cpp)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -499,6 +514,13 @@ jobs:
             }
           done
           echo 'OK: WebKitLegacy TAPI sees all migrated WebCore headers'
+
+          echo '=== Verify resetPotentialTapSecurityOrigin feature guard ==='
+          if grep -n -B1 -A5 'void WebPage::resetPotentialTapSecurityOrigin()' Source/WebKit/WebProcess/WebPage/WebPage.cpp | grep -q '!ENABLE(IOS_TOUCH_EVENTS)'; then
+            echo 'ERROR: resetPotentialTapSecurityOrigin fallback exists while IOS_TOUCH_EVENTS is disabled' >&2
+            exit 1
+          fi
+          echo 'OK: no resetPotentialTapSecurityOrigin fallback outside ENABLE(IOS_TOUCH_EVENTS)'
 
           echo '=== Verify Safari 15 WebTouchEvent modifier type ==='
           if grep -n 'OptionSet<WebEventModifier> m_modifiers' Source/WebKit/Shared/WebTouchEvent.h; then
