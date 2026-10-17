@@ -311,6 +311,54 @@ jobs:
 
           with open(wtf_fs_path, "w") as f:
               f.write(wtf_fs)
+
+          # 4j. Backport TAPI migrated-header workaround cho WebKitLegacy trên Xcode 15.
+          #     WebKitLegacy re-export nhiều WebCore symbol nhưng các header tương ứng được
+          #     MigrateHeaders.make copy bằng script, nên TAPI mới không tự xem chúng là API headers.
+          #     WebKit hiện đại giải quyết bằng -extra-private-header cho toàn bộ migrated headers.
+          legacy_xcconfig_path = "Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig"
+          with open(legacy_xcconfig_path, "r") as f:
+              legacy_xcconfig = f.read()
+
+          tapi_headers = [
+              "WebKitAvailability.h",
+              "WebScriptObject.h",
+              "AbstractPasteboard.h",
+              "KeyEventCodesIOS.h",
+              "WAKAppKitStubs.h",
+              "WAKResponder.h",
+              "WAKView.h",
+              "WAKWindow.h",
+              "WKContentObservation.h",
+              "WKGraphics.h",
+              "WKTypes.h",
+              "WebCoreThread.h",
+              "WebCoreThreadMessage.h",
+              "WebCoreThreadRun.h",
+              "WebEvent.h",
+              "WebItemProviderPasteboard.h",
+          ]
+
+          tapi_prefix = "OTHER_TAPI_FLAGS[sdk=iphone*] = "
+          tapi_lines = [line for line in legacy_xcconfig.splitlines() if line.startswith(tapi_prefix)]
+          if len(tapi_lines) != 1:
+              raise RuntimeError("Expected exactly one iPhone OTHER_TAPI_FLAGS line in WebKitLegacy.xcconfig, found " + str(len(tapi_lines)))
+
+          old_tapi_line = tapi_lines[0]
+          new_tapi_line = old_tapi_line
+          for header in tapi_headers:
+              flag = " -extra-private-header $(BUILT_PRODUCTS_DIR)/$(PRIVATE_HEADERS_FOLDER_PATH)/" + header
+              if flag not in new_tapi_line:
+                  new_tapi_line += flag
+
+          legacy_xcconfig = legacy_xcconfig.replace(old_tapi_line, new_tapi_line, 1)
+          with open(legacy_xcconfig_path, "w") as f:
+              f.write(legacy_xcconfig)
+
+          for header in tapi_headers:
+              expected = "-extra-private-header $(BUILT_PRODUCTS_DIR)/$(PRIVATE_HEADERS_FOLDER_PATH)/" + header
+              if expected not in legacy_xcconfig:
+                  raise RuntimeError("Missing WebKitLegacy TAPI migrated header flag: " + header)
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -344,6 +392,16 @@ jobs:
             exit 1
           fi
           echo 'OK: dead WTFWebFileManagerDelegate removed before linking WebCore'
+
+          echo '=== Verify WebKitLegacy TAPI migrated headers ==='
+          grep -n 'OTHER_TAPI_FLAGS\[sdk=iphone\*\]' Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig || true
+          for header in WebKitAvailability.h WebScriptObject.h AbstractPasteboard.h KeyEventCodesIOS.h WAKAppKitStubs.h WAKResponder.h WAKView.h WAKWindow.h WKContentObservation.h WKGraphics.h WKTypes.h WebCoreThread.h WebCoreThreadMessage.h WebCoreThreadRun.h WebEvent.h WebItemProviderPasteboard.h; do
+            grep -Fq -- "-extra-private-header \$(BUILT_PRODUCTS_DIR)/\$(PRIVATE_HEADERS_FOLDER_PATH)/${header}" Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig || {
+              echo "ERROR: missing TAPI migrated header flag for ${header}" >&2
+              exit 1
+            }
+          done
+          echo 'OK: WebKitLegacy TAPI sees all migrated WebCore headers'
 
           Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
