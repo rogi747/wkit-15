@@ -471,6 +471,23 @@ jobs:
           with open(webpage_cpp_path, "w") as f:
               f.write(webpage_cpp)
 
+          # 4o. Xcode 15 / iOS 17 SDK marks xpc_connection_get_pid() unavailable on iOS.
+          #     Safari 15 already receives the launched PID through ProcessLauncher, so use
+          #     that public WebKit-owned PID instead of querying the XPC connection.
+          webauthn_proxy_path = "Source/WebKit/UIProcess/WebAuthentication/WebAuthnProcessProxy.cpp"
+          with open(webauthn_proxy_path, "r") as f:
+              webauthn_proxy = f.read()
+          stale_xpc_pid = "    if (xpc_connection_t connection = this->connection()->xpcConnection())\n        m_throttler.didConnectToProcess(xpc_connection_get_pid(connection));"
+          launcher_pid = "    m_throttler.didConnectToProcess(launcher->processIdentifier());"
+          if stale_xpc_pid in webauthn_proxy:
+              webauthn_proxy = webauthn_proxy.replace(stale_xpc_pid, launcher_pid, 1)
+          if "xpc_connection_get_pid(connection)" in webauthn_proxy:
+              raise RuntimeError("stale xpc_connection_get_pid() call remains in WebAuthnProcessProxy")
+          if launcher_pid not in webauthn_proxy:
+              raise RuntimeError("ProcessLauncher PID compatibility patch missing in WebAuthnProcessProxy")
+          with open(webauthn_proxy_path, "w") as f:
+              f.write(webauthn_proxy)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -514,6 +531,17 @@ jobs:
             }
           done
           echo 'OK: WebKitLegacy TAPI sees all migrated WebCore headers'
+
+          echo '=== Verify WebAuthn ProcessLauncher PID compatibility ==='
+          if grep -n 'xpc_connection_get_pid(connection)' Source/WebKit/UIProcess/WebAuthentication/WebAuthnProcessProxy.cpp; then
+            echo 'ERROR: xpc_connection_get_pid is unavailable in the iOS 17.5 SDK' >&2
+            exit 1
+          fi
+          grep -n 'm_throttler.didConnectToProcess(launcher->processIdentifier())' Source/WebKit/UIProcess/WebAuthentication/WebAuthnProcessProxy.cpp || {
+            echo 'ERROR: WebAuthnProcessProxy is not using ProcessLauncher PID' >&2
+            exit 1
+          }
+          echo 'OK: WebAuthnProcessProxy uses ProcessLauncher PID instead of unavailable XPC API'
 
           echo '=== Verify resetPotentialTapSecurityOrigin feature guard ==='
           if grep -n -B1 -A5 'void WebPage::resetPotentialTapSecurityOrigin()' Source/WebKit/WebProcess/WebPage/WebPage.cpp | grep -q '!ENABLE(IOS_TOUCH_EVENTS)'; then
