@@ -498,6 +498,23 @@ jobs:
               with open(proxy_path, "w") as f:
                   f.write(proxy_source)
 
+          # 4p. Safari 15 declared UIDatePickerModeYearAndMonth as private SPI.
+          #     Starting with the iOS 17.4 SDK, UIKit declares the same enumerator
+          #     publicly. Keep the Safari 15 fallback only when compiling with an
+          #     SDK older than 17.4; the value is compile-time, so this remains
+          #     compatible with an eventual iOS 15 deployment target.
+          webkit_uikit_path = "Source/WebKit/Platform/spi/ios/UIKitSPI.h"
+          with open(webkit_uikit_path, "r") as f:
+              webkit_uikit = f.read()
+          date_picker_spi = "typedef NS_ENUM(NSInteger, UIDatePickerPrivateMode)  {\n    UIDatePickerModeYearAndMonth = 4269,\n};"
+          guarded_date_picker_spi = "#if __IPHONE_OS_VERSION_MAX_ALLOWED < 170400\n" + date_picker_spi + "\n#endif"
+          if date_picker_spi in webkit_uikit and guarded_date_picker_spi not in webkit_uikit:
+              webkit_uikit = webkit_uikit.replace(date_picker_spi, guarded_date_picker_spi, 1)
+          if guarded_date_picker_spi not in webkit_uikit:
+              raise RuntimeError("UIDatePickerModeYearAndMonth SDK guard was not installed")
+          with open(webkit_uikit_path, "w") as f:
+              f.write(webkit_uikit)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -558,6 +575,18 @@ jobs:
             }
           done
           echo 'OK: all UIProcess throttlers use ProcessLauncher PID instead of unavailable XPC API'
+
+          echo '=== Verify UIDatePickerModeYearAndMonth SDK compatibility ==='
+          grep -n -B1 -A4 'UIDatePickerPrivateMode' Source/WebKit/Platform/spi/ios/UIKitSPI.h || true
+          python3 - <<'PYVERIFY'
+          from pathlib import Path
+          p = Path('Source/WebKit/Platform/spi/ios/UIKitSPI.h')
+          s = p.read_text()
+          expected = '#if __IPHONE_OS_VERSION_MAX_ALLOWED < 170400\ntypedef NS_ENUM(NSInteger, UIDatePickerPrivateMode)  {\n    UIDatePickerModeYearAndMonth = 4269,\n};\n#endif'
+          if expected not in s:
+              raise SystemExit('ERROR: Safari 15 UIDatePickerModeYearAndMonth fallback is not guarded for SDK 17.4+')
+          print('OK: private UIDatePickerModeYearAndMonth is excluded when building against iOS 17.4+ SDKs')
+          PYVERIFY
 
           echo '=== Verify resetPotentialTapSecurityOrigin feature guard ==='
           if grep -n -B1 -A5 'void WebPage::resetPotentialTapSecurityOrigin()' Source/WebKit/WebProcess/WebPage/WebPage.cpp | grep -q '!ENABLE(IOS_TOUCH_EVENTS)'; then
