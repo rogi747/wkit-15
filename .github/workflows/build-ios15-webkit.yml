@@ -59,6 +59,39 @@ jobs:
 
           cd WebKit-15.0
 
+          # 0. Runtime-only mode is applied here instead of relying on ios15-port.patch.
+          #    This keeps the patch portable and guarantees the expensive test projects
+          #    (DumpRenderTree/WebKitTestRunner/gtest/TestWebKitAPI/ImageDiff) are skipped.
+          python3 - <<'PYRUNTIMEONLY'
+          from pathlib import Path
+
+          path = Path('Tools/Scripts/build-webkit')
+          text = path.read_text()
+
+          plain_tests = '    push @projects, ("Tools/DumpRenderTree", "Tools/WebKitTestRunner", "Source/ThirdParty/gtest", "Tools/TestWebKitAPI");'
+          guarded_tests = "    push @projects, (\"Tools/DumpRenderTree\", \"Tools/WebKitTestRunner\", \"Source/ThirdParty/gtest\", \"Tools/TestWebKitAPI\") unless $ENV{'WK_RUNTIME_ONLY'};"
+          if plain_tests in text:
+              text = text.replace(plain_tests, guarded_tests, 1)
+          elif guarded_tests not in text:
+              raise RuntimeError('Unexpected build-webkit test-project list; cannot enable runtime-only mode safely')
+
+          runtime_exit = "    exit 0 if $ENV{'WK_RUNTIME_ONLY'};\n\n"
+          imagediff_marker = '    # Build ImageDiff for host\n'
+          if runtime_exit not in text:
+              if imagediff_marker not in text:
+                  raise RuntimeError('ImageDiff marker missing from build-webkit')
+              text = text.replace(imagediff_marker, runtime_exit + imagediff_marker, 1)
+
+          path.write_text(text)
+
+          final = path.read_text()
+          if guarded_tests not in final:
+              raise RuntimeError('runtime-only test-project guard was not installed')
+          if runtime_exit.strip() not in final:
+              raise RuntimeError('runtime-only ImageDiff exit was not installed')
+          print('Patched build-webkit runtime-only mode')
+          PYRUNTIMEONLY
+
           # 1. Tạo symlink cho iOS 17 PrivateFrameworkStubs
           if [ -d "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/15" ] && [ ! -e "WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17" ]; then
             ln -s 15 WebKitLibraries/WebKitPrivateFrameworkStubs/iOS/17
@@ -844,19 +877,19 @@ jobs:
           echo 'OK: Inspector generator imports cleanly under Python 3'
 
           echo '=== Verify runtime-only WebKit build mode ==='
-          grep -n "WK_RUNTIME_ONLY" Tools/Scripts/build-webkit || {
-            echo 'ERROR: runtime-only build-webkit patch is missing' >&2
+          grep -n -F 'Tools/DumpRenderTree", "Tools/WebKitTestRunner", "Source/ThirdParty/gtest", "Tools/TestWebKitAPI") unless $ENV{'\''WK_RUNTIME_ONLY'\''};' Tools/Scripts/build-webkit || {
+            echo 'ERROR: test projects are not guarded by WK_RUNTIME_ONLY after runtime transform' >&2
             exit 1
           }
-          grep -Fq 'unless $ENV{'\''WK_RUNTIME_ONLY'\''}' Tools/Scripts/build-webkit || {
-            echo 'ERROR: test projects are not guarded by WK_RUNTIME_ONLY' >&2
+          grep -n -F 'exit 0 if $ENV{'\''WK_RUNTIME_ONLY'\''};' Tools/Scripts/build-webkit || {
+            echo 'ERROR: ImageDiff is not skipped in runtime-only mode after runtime transform' >&2
             exit 1
           }
-          grep -Fq 'exit 0 if $ENV{'\''WK_RUNTIME_ONLY'\''};' Tools/Scripts/build-webkit || {
-            echo 'ERROR: ImageDiff is not skipped in runtime-only mode' >&2
+          if grep -n -F 'push @projects, ("Tools/DumpRenderTree", "Tools/WebKitTestRunner", "Source/ThirdParty/gtest", "Tools/TestWebKitAPI");' Tools/Scripts/build-webkit; then
+            echo 'ERROR: unguarded test-project list remains in build-webkit' >&2
             exit 1
-          }
-          echo 'OK: DumpRenderTree/WebKitTestRunner/gtest/TestWebKitAPI/ImageDiff are excluded from runtime build'
+          fi
+          echo 'OK: runtime-only mode is installed; DumpRenderTree/WebKitTestRunner/gtest/TestWebKitAPI/ImageDiff are excluded'
 
           WK_RUNTIME_ONLY=1 Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
