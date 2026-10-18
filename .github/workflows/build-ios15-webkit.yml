@@ -926,13 +926,32 @@ jobs:
               )
               print(f'--- {name} ---')
               print(result.stdout.rstrip())
-              versions = re.findall(r'^\s*(?:minos|version)\s+([0-9.]+)\s*$', result.stdout, re.MULTILINE)
+              arch_result = subprocess.run(
+                  ['lipo', '-archs', str(binary)],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  check=True,
+              )
+              archs = arch_result.stdout.strip().split()
+              missing_archs = [arch for arch in ('arm64', 'arm64e') if arch not in archs]
+              if missing_archs:
+                  raise SystemExit(f'ERROR: {name} is missing required architecture(s): {missing_archs}; got {archs}')
+
+              platforms = re.findall(r'^\s*platform\s+(\S+)\s*$', result.stdout, re.MULTILINE)
+              if not platforms:
+                  raise SystemExit(f'ERROR: cannot determine Mach-O platform for {name}')
+              bad_platforms = [platform for platform in platforms if platform != 'IOS']
+              if bad_platforms:
+                  raise SystemExit(f'ERROR: {name} contains non-iOS platform(s): {bad_platforms}')
+
+              versions = re.findall(r'^\s*minos\s+([0-9.]+)\s*$', result.stdout, re.MULTILINE)
               if not versions:
                   raise SystemExit(f'ERROR: cannot determine deployment target for {name}')
               bad = [version for version in versions if version != '15.0']
               if bad:
                   raise SystemExit(f'ERROR: {name} contains non-iOS-15 deployment target(s): {bad}')
-              print(f'OK: {name} minos={versions}')
+              print(f'OK: {name} archs={archs} platform={platforms} minos={versions}')
           PYMINOS
 
           echo '=== Package runtime frameworks ==='
