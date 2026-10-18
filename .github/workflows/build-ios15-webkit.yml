@@ -843,9 +843,77 @@ jobs:
           grep -n 'WEBKITADDITIONS_HEADER_SEARCH_PATHS' Source/WebKit/Scripts/generate-derived-sources.sh
           echo 'OK: Inspector generator imports cleanly under Python 3'
 
-          Tools/Scripts/build-webkit --ios-device --release --use-ccache \
+          echo '=== Verify runtime-only WebKit build mode ==='
+          grep -n "WK_RUNTIME_ONLY" Tools/Scripts/build-webkit || {
+            echo 'ERROR: runtime-only build-webkit patch is missing' >&2
+            exit 1
+          }
+          grep -Fq 'unless $ENV{'\''WK_RUNTIME_ONLY'\''}' Tools/Scripts/build-webkit || {
+            echo 'ERROR: test projects are not guarded by WK_RUNTIME_ONLY' >&2
+            exit 1
+          }
+          grep -Fq 'exit 0 if $ENV{'\''WK_RUNTIME_ONLY'\''};' Tools/Scripts/build-webkit || {
+            echo 'ERROR: ImageDiff is not skipped in runtime-only mode' >&2
+            exit 1
+          }
+          echo 'OK: DumpRenderTree/WebKitTestRunner/gtest/TestWebKitAPI/ImageDiff are excluded from runtime build'
+
+          WK_RUNTIME_ONLY=1 Tools/Scripts/build-webkit --ios-device --release --use-ccache \
             WK_USE_CCACHE=YES \
             ARCHS='arm64 arm64e' \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             OTHER_CFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -I${SHIM_INC}/libxml2 -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-error=strict-prototypes -Wno-strict-prototypes" \
             OTHER_CPLUSPLUSFLAGS="\$(inherited) -isystem ${SHIM_INC} -I${ROOT_DIR} -I${SHIM_INC}/libxml2 -DHAVE_READLINE=0 -Wno-error -Wno-availability -Wno-deprecated-declarations -Wno-enum-constexpr-conversion"
+
+
+          echo '=== Verify Mach-O deployment target is iOS 15.0 ==='
+          python3 - <<'PYMINOS'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          products = Path('WebKitBuild/Release-iphoneos')
+          frameworks = [
+              ('JavaScriptCore', products / 'JavaScriptCore.framework' / 'JavaScriptCore'),
+              ('WebCore', products / 'WebCore.framework' / 'WebCore'),
+              ('WebKitLegacy', products / 'WebKitLegacy.framework' / 'WebKitLegacy'),
+              ('WebKit', products / 'WebKit.framework' / 'WebKit'),
+          ]
+
+          for name, binary in frameworks:
+              if not binary.is_file():
+                  raise SystemExit(f'ERROR: expected framework binary is missing: {binary}')
+              result = subprocess.run(
+                  ['xcrun', 'vtool', '-show-build', str(binary)],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  check=True,
+              )
+              print(f'--- {name} ---')
+              print(result.stdout.rstrip())
+              versions = re.findall(r'^\s*(?:minos|version)\s+([0-9.]+)\s*$', result.stdout, re.MULTILINE)
+              if not versions:
+                  raise SystemExit(f'ERROR: cannot determine deployment target for {name}')
+              bad = [version for version in versions if version != '15.0']
+              if bad:
+                  raise SystemExit(f'ERROR: {name} contains non-iOS-15 deployment target(s): {bad}')
+              print(f'OK: {name} minos={versions}')
+          PYMINOS
+
+          echo '=== Package runtime frameworks ==='
+          tar -czf "${ROOT_DIR}/WebKit-iOS15-arm64-arm64e.tar.gz" \
+            -C WebKitBuild/Release-iphoneos \
+            JavaScriptCore.framework \
+            WebCore.framework \
+            WebKitLegacy.framework \
+            WebKit.framework
+
+
+      - name: Upload iOS 15 WebKit runtime frameworks
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebKit-iOS15-arm64-arm64e
+          path: WebKit-iOS15-arm64-arm64e.tar.gz
+          if-no-files-found: error
