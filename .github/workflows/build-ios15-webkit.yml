@@ -550,6 +550,28 @@ jobs:
               source = re.sub(r"(?<![A-Za-z0-9_])xpc_connection_get_pid\(", "webkit_xpc_connection_get_pid(", source)
               source_path.write_text(source, errors="surrogateescape")
 
+          # 4r. Safari 15 has a C++ type bug in InjectedBundle::initialize():
+          #     one failure path returns Objective-C nil from a bool function. Older
+          #     toolchains accepted this via legacy null-pointer conversion, while
+          #     modern Clang maps nil to nullptr and rejects nullptr -> bool. WebKit
+          #     fixed this upstream by returning false. Backport that exact fix.
+          injected_bundle_path = "Source/WebKit/WebProcess/InjectedBundle/mac/InjectedBundleMac.mm"
+          with open(injected_bundle_path, "r") as f:
+              injected_bundle = f.read()
+          injected_old = (
+              "if (![m_platformBundle preflightAndReturnError:&error]) {\n"
+              "            NSLog(@\"InjectedBundle::load failed - preflightAndReturnError failed, error: %@\", error);\n"
+              "            return nil;\n"
+              "        }"
+          )
+          injected_new = injected_old.replace("return nil;", "return false;")
+          if injected_old in injected_bundle:
+              injected_bundle = injected_bundle.replace(injected_old, injected_new, 1)
+          if injected_new not in injected_bundle:
+              raise RuntimeError("InjectedBundle bool-return compatibility fix was not installed")
+          with open(injected_bundle_path, "w") as f:
+              f.write(injected_bundle)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -637,6 +659,20 @@ jobs:
             exit 1
           }
           echo 'OK: WebKit derives XPC peer PID from the audit token instead of the unavailable SDK API'
+
+          echo '=== Verify InjectedBundle bool-return compatibility ==='
+          python3 - <<'PYVERIFY'
+          from pathlib import Path
+          p = Path('Source/WebKit/WebProcess/InjectedBundle/mac/InjectedBundleMac.mm')
+          s = p.read_text()
+          bad = 'preflightAndReturnError:&error]) {\n            NSLog(@"InjectedBundle::load failed - preflightAndReturnError failed, error: %@", error);\n            return nil;'
+          good = bad.replace('return nil;', 'return false;')
+          if bad in s:
+              raise SystemExit('ERROR: InjectedBundle::initialize still returns nil from a bool function')
+          if good not in s:
+              raise SystemExit('ERROR: expected InjectedBundle preflight failure branch with return false was not found')
+          print('OK: InjectedBundle::initialize returns false on preflight failure')
+          PYVERIFY
 
           echo '=== Verify resetPotentialTapSecurityOrigin feature guard ==='
           if grep -n -B1 -A5 'void WebPage::resetPotentialTapSecurityOrigin()' Source/WebKit/WebProcess/WebPage/WebPage.cpp | grep -q '!ENABLE(IOS_TOUCH_EVENTS)'; then
