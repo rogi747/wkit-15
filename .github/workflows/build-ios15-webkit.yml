@@ -515,6 +515,41 @@ jobs:
           with open(webkit_uikit_path, "w") as f:
               f.write(webkit_uikit)
 
+          # 4q. Foundation from the Xcode 15.4 iOS SDK exposes xpc_connection_get_pid()
+          #     as explicitly unavailable on iOS. Safari 15 still needs the peer PID in
+          #     low-level IPC code. Derive the exact PID from the XPC audit token instead;
+          #     audit_token_t stores the process ID in val[5] on Darwin. This also keeps
+          #     ProcessLauncher/ConnectionCocoa independent of the unavailable declaration.
+          xpc_spi_path = "Source/WTF/wtf/spi/darwin/XPCSPI.h"
+          with open(xpc_spi_path, "r") as f:
+              xpc_spi = f.read()
+          xpc_pid_anchor = "void xpc_connection_get_audit_token(xpc_connection_t, audit_token_t*);"
+          xpc_pid_helper = """static inline pid_t webkit_xpc_connection_get_pid(xpc_connection_t connection)
+          {
+              audit_token_t auditToken;
+              xpc_connection_get_audit_token(connection, &auditToken);
+              return (pid_t)auditToken.val[5];
+          }"""
+          if xpc_pid_helper not in xpc_spi:
+              if xpc_pid_anchor not in xpc_spi:
+                  raise RuntimeError("XPC audit-token declaration not found in XPCSPI.h")
+              xpc_spi = xpc_spi.replace(xpc_pid_anchor, xpc_pid_anchor + "\n" + xpc_pid_helper, 1)
+          with open(xpc_spi_path, "w") as f:
+              f.write(xpc_spi)
+
+          # Replace any remaining direct call in WebKit source. The UIProcess proxy calls
+          # above already use ProcessLauncher::processIdentifier(); this catches IPC::Connection
+          # and ProcessLauncher itself, plus any other Safari-15 call site we may have missed.
+          from pathlib import Path as _Path
+          for source_path in _Path("Source/WebKit").rglob("*"):
+              if source_path.suffix not in {".cpp", ".mm", ".m", ".h"}:
+                  continue
+              source = source_path.read_text(errors="surrogateescape")
+              if not re.search(r"(?<![A-Za-z0-9_])xpc_connection_get_pid\(", source):
+                  continue
+              source = re.sub(r"(?<![A-Za-z0-9_])xpc_connection_get_pid\(", "webkit_xpc_connection_get_pid(", source)
+              source_path.write_text(source, errors="surrogateescape")
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -587,6 +622,21 @@ jobs:
               raise SystemExit('ERROR: Safari 15 UIDatePickerModeYearAndMonth fallback is not guarded for SDK 17.4+')
           print('OK: private UIDatePickerModeYearAndMonth is excluded when building against iOS 17.4+ SDKs')
           PYVERIFY
+
+          echo '=== Verify XPC PID compatibility for Xcode 15 iOS SDK ==='
+          grep -n -A6 'static inline pid_t webkit_xpc_connection_get_pid' Source/WTF/wtf/spi/darwin/XPCSPI.h || {
+            echo 'ERROR: XPC audit-token PID helper is missing' >&2
+            exit 1
+          }
+          if grep -R -n -E --include='*.cpp' --include='*.mm' --include='*.m' --include='*.h' '(^|[^[:alnum:]_])xpc_connection_get_pid\(' Source/WebKit; then
+            echo 'ERROR: direct xpc_connection_get_pid() call remains under Source/WebKit and will fail with the iOS 17.5 SDK' >&2
+            exit 1
+          fi
+          grep -n 'webkit_xpc_connection_get_pid' Source/WebKit/Platform/IPC/cocoa/ConnectionCocoa.mm Source/WebKit/UIProcess/Launcher/mac/ProcessLauncherMac.mm || {
+            echo 'ERROR: expected Safari 15 IPC PID call sites were not converted' >&2
+            exit 1
+          }
+          echo 'OK: WebKit derives XPC peer PID from the audit token instead of the unavailable SDK API'
 
           echo '=== Verify resetPotentialTapSecurityOrigin feature guard ==='
           if grep -n -B1 -A5 'void WebPage::resetPotentialTapSecurityOrigin()' Source/WebKit/WebProcess/WebPage/WebPage.cpp | grep -q '!ENABLE(IOS_TOUCH_EVENTS)'; then
