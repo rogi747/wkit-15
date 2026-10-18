@@ -70,12 +70,26 @@ jobs:
           # 2b. Sửa lỗi C++: không thể return nullptr cho hàm bool
           sed -i '' '170,185s/return nullptr;/return false;/' Source/WebCore/platform/graphics/cg/ImageBufferUtilitiesCG.cpp
 
-          # 3. Link bổ sung libWTF.a (KHÔNG dùng -force_load) cho jsc, WebCore, WebKitLegacy và WebKit
+          # 3. Link bổ sung WTF/bmalloc cho tool executables. Với các dynamic frameworks,
+          #    dùng ld64 -load_hidden để archive vẫn thỏa undefined references nhưng không
+          #    làm hàng nghìn WTF/bmalloc symbols trở thành API exports và khiến TAPI fail.
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/jsc.xcconfig
           echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" "$(BUILT_PRODUCTS_DIR)/libbmalloc.a" -framework CoreFoundation -framework Foundation -lobjc -licucore' >> Source/JavaScriptCore/Configurations/ToolExecutable.xcconfig
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebCore/Configurations/WebCore.xcconfig
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig
-          echo 'OTHER_LDFLAGS = $(inherited) "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebKit/Configurations/WebKit.xcconfig
+          echo 'OTHER_LDFLAGS = $(inherited) -Xlinker -load_hidden -Xlinker "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebCore/Configurations/WebCore.xcconfig
+          echo 'OTHER_LDFLAGS = $(inherited) -Xlinker -load_hidden -Xlinker "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig
+          echo 'OTHER_LDFLAGS = $(inherited) -Xlinker -load_hidden -Xlinker "$(BUILT_PRODUCTS_DIR)/libWTF.a" -licucore' >> Source/WebKit/Configurations/WebKit.xcconfig
+
+          echo '=== Verify hidden WTF archive linkage for dynamic frameworks ==='
+          for xcconfig in \
+            Source/WebCore/Configurations/WebCore.xcconfig \
+            Source/WebKitLegacy/mac/Configurations/WebKitLegacy.xcconfig \
+            Source/WebKit/Configurations/WebKit.xcconfig; do
+            if ! grep -Fq -- '-Xlinker -load_hidden -Xlinker "$(BUILT_PRODUCTS_DIR)/libWTF.a"' "$xcconfig"; then
+              echo "ERROR: $xcconfig does not hide libWTF.a symbols" >&2
+              exit 1
+            fi
+          done
+          echo 'OK: libWTF.a is linked privately into WebCore/WebKitLegacy/WebKit'
 
           # 4. Xử lý xung đột SPI, tương thích C++ và Availability
           python3 -c '
