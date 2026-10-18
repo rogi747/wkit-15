@@ -612,6 +612,28 @@ jobs:
           with open(xpc_service_main_path, "w") as f:
               f.write(xpc_service_main)
 
+          # 4t. Safari 15 _WKUserContentFilterPrivate.h forward-declares the old
+          #     WKUserContentRuleList class, but its private initializer takes
+          #     WKContentRuleList*. Modern WebKit carries both forward declarations.
+          #     Newer Clang diagnoses the missing Objective-C type declaration.
+          user_filter_private_path = "Source/WebKit/UIProcess/API/Cocoa/_WKUserContentFilterPrivate.h"
+          with open(user_filter_private_path, "r") as f:
+              user_filter_private = f.read()
+          content_rule_decl = "@class WKContentRuleList;"
+          old_rule_decl = "@class WKUserContentRuleList;"
+          if content_rule_decl not in user_filter_private:
+              if old_rule_decl not in user_filter_private:
+                  raise RuntimeError("WKUserContentRuleList forward-declaration anchor not found")
+              user_filter_private = user_filter_private.replace(
+                  old_rule_decl,
+                  content_rule_decl + "\n" + old_rule_decl,
+                  1,
+              )
+          if content_rule_decl not in user_filter_private:
+              raise RuntimeError("WKContentRuleList forward declaration was not installed")
+          with open(user_filter_private_path, "w") as f:
+              f.write(user_filter_private)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -699,6 +721,22 @@ jobs:
             exit 1
           }
           echo 'OK: WebKit derives XPC peer PID from the audit token instead of the unavailable SDK API'
+
+
+          echo '=== Verify WKContentRuleList private-header declaration ==='
+          grep -n -A3 -B1 '@class WKContentRuleList;' Source/WebKit/UIProcess/API/Cocoa/_WKUserContentFilterPrivate.h || {
+            echo 'ERROR: WKContentRuleList forward declaration is missing from _WKUserContentFilterPrivate.h' >&2
+            exit 1
+          }
+          python3 - <<'PYVERIFY'
+          from pathlib import Path
+          s = Path('Source/WebKit/UIProcess/API/Cocoa/_WKUserContentFilterPrivate.h').read_text()
+          if '@class WKContentRuleList;' not in s:
+              raise SystemExit('ERROR: WKContentRuleList is used before being declared')
+          if '- (id)_initWithWKContentRuleList:(WKContentRuleList*)contentRuleList' not in s:
+              raise SystemExit('ERROR: expected _initWithWKContentRuleList signature changed unexpectedly')
+          print('OK: _WKUserContentFilterPrivate.h declares WKContentRuleList before use')
+          PYVERIFY
 
           echo '=== Verify XPC service entry-point compatibility ==='
           grep -n -B2 -A8 'static void webkitXPCMain' Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm || {
