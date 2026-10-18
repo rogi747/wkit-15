@@ -572,6 +572,46 @@ jobs:
           with open(injected_bundle_path, "w") as f:
               f.write(injected_bundle)
 
+          # 4s. The Xcode 15.4 public iOS SDK marks xpc_main() unavailable, even
+          #     though the WebKit XPC service entry point still relies on that libxpc
+          #     symbol (and modern WebKit continues to use it with the Apple internal
+          #     SDK). Resolve the existing runtime symbol via dlsym so we preserve
+          #     Safari 15 XPC service behavior without compiling a direct
+          #     reference to the unavailable SDK declaration.
+          xpc_service_main_path = "Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm"
+          with open(xpc_service_main_path, "r") as f:
+              xpc_service_main = f.read()
+          if "#import <dlfcn.h>" not in xpc_service_main:
+              cf_anchor = "#import <CoreFoundation/CoreFoundation.h>\n"
+              if cf_anchor not in xpc_service_main:
+                  raise RuntimeError("CoreFoundation include anchor not found in XPCServiceMain.mm")
+              xpc_service_main = xpc_service_main.replace(cf_anchor, cf_anchor + "#import <dlfcn.h>\n", 1)
+          xpc_main_helper = """static void webkitXPCMain(xpc_connection_handler_t handler)
+          {
+              using XPCMainFunction = void (*)(xpc_connection_handler_t);
+              auto function = reinterpret_cast<XPCMainFunction>(dlsym(RTLD_DEFAULT, "xpc_main"));
+              RELEASE_ASSERT(function);
+              function(handler);
+          }
+          """
+          if xpc_main_helper not in xpc_service_main:
+              namespace_anchor = "namespace WebKit {\n"
+              if namespace_anchor not in xpc_service_main:
+                  raise RuntimeError("WebKit namespace anchor not found in XPCServiceMain.mm")
+              xpc_service_main = xpc_service_main.replace(namespace_anchor, namespace_anchor + xpc_main_helper, 1)
+          xpc_service_main = re.sub(
+              r"(?m)^(\s*)xpc_main\(XPCServiceEventHandler\);$",
+              r"\1webkitXPCMain(XPCServiceEventHandler);",
+              xpc_service_main,
+              count=1,
+          )
+          if re.search(r"(?<![A-Za-z0-9_])xpc_main\(XPCServiceEventHandler\)", xpc_service_main):
+              raise RuntimeError("direct xpc_main(XPCServiceEventHandler) call remains")
+          if "webkitXPCMain(XPCServiceEventHandler);" not in xpc_service_main:
+              raise RuntimeError("XPCServiceMain compatibility call was not installed")
+          with open(xpc_service_main_path, "w") as f:
+              f.write(xpc_service_main)
+
           '
 
           echo '=== Verify NSTextList soft-link backport ==='
@@ -659,6 +699,21 @@ jobs:
             exit 1
           }
           echo 'OK: WebKit derives XPC peer PID from the audit token instead of the unavailable SDK API'
+
+          echo '=== Verify XPC service entry-point compatibility ==='
+          grep -n -B2 -A8 'static void webkitXPCMain' Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm || {
+            echo 'ERROR: XPC service dlsym compatibility wrapper is missing' >&2
+            exit 1
+          }
+          grep -n 'webkitXPCMain(XPCServiceEventHandler);' Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm || {
+            echo 'ERROR: XPCServiceMain still does not call the compatibility wrapper' >&2
+            exit 1
+          }
+          if grep -n -E '(^|[^[:alnum:]_])xpc_main\(XPCServiceEventHandler\)' Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm; then
+            echo 'ERROR: direct xpc_main() is unavailable in the Xcode 15.4 public iOS SDK' >&2
+            exit 1
+          fi
+          echo 'OK: XPC service resolves xpc_main dynamically instead of compiling the unavailable iOS SDK declaration'
 
           echo '=== Verify InjectedBundle bool-return compatibility ==='
           python3 - <<'PYVERIFY'
